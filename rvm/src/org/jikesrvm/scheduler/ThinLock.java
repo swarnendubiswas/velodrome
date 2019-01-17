@@ -12,10 +12,15 @@
  */
 package org.jikesrvm.scheduler;
 
-import org.jikesrvm.VM;
 import org.jikesrvm.Services;
+import org.jikesrvm.VM;
 import org.jikesrvm.objectmodel.ThinLockConstants;
+import org.jikesrvm.octet.Communication;
+import org.jikesrvm.octet.Octet;
+import org.jikesrvm.octet.Stats;
 import org.jikesrvm.runtime.Magic;
+import org.jikesrvm.velodrome.Velodrome;
+import org.jikesrvm.velodrome.VelodromeMetadataHelper;
 import org.vmmagic.pragma.Inline;
 import org.vmmagic.pragma.NoInline;
 import org.vmmagic.pragma.NoNullCheck;
@@ -32,10 +37,32 @@ public final class ThinLock implements ThinLockConstants {
 
   private static final boolean ENABLE_BIASED_LOCKING = true;
 
+  // Velodrome: Lock acquire() with instrumentation
   @Inline
   @NoNullCheck
   @Unpreemptible
   public static void inlineLock(Object o, Offset lockOffset) {
+    inlineLockHelper(o, lockOffset);
+    if (Velodrome.trackSynchronizationPrimitives()) {
+      if (VM.VerifyAssertions) { VM._assert(Velodrome.addMiscHeader()); }
+      if (RVMThread.getCurrentThread().isOctetThread()) {
+        VelodromeMetadataHelper.trackLockAcquire(o);
+      }
+    }
+  }
+  
+  // Velodrome: Lock acquire() without instrumentation
+  @Inline
+  @NoNullCheck
+  @Unpreemptible
+  public static void inlineLockWithoutInstrumentation(Object o, Offset lockOffset) {
+    inlineLockHelper(o, lockOffset);
+  }
+  
+  @Inline
+  @NoNullCheck
+  @Unpreemptible
+  public static void inlineLockHelper(Object o, Offset lockOffset) {
     Word old = Magic.prepareWord(o, lockOffset); // FIXME: bad for PPC?
     Word id = old.and(TL_THREAD_ID_MASK.or(TL_STAT_MASK));
     Word tid = Word.fromIntSignExtend(RVMThread.getCurrentThread().getLockingId());
@@ -55,10 +82,32 @@ public final class ThinLock implements ThinLockConstants {
     lock(o, lockOffset);
   }
 
+  // Velodrome: Lock release() with instrumentation
   @Inline
   @NoNullCheck
   @Unpreemptible
   public static void inlineUnlock(Object o, Offset lockOffset) {
+    if (Velodrome.trackSynchronizationPrimitives()) {
+      if (VM.VerifyAssertions) { VM._assert(Velodrome.addMiscHeader()); }
+      if (RVMThread.getCurrentThread().isOctetThread()) {
+          VelodromeMetadataHelper.trackLockRelease(o);
+        }
+    }
+    inlineUnlockHelper(o, lockOffset);
+  }
+  
+  // Velodrome: Lock release() without instrumentation
+  @Inline
+  @NoNullCheck
+  @Unpreemptible
+  public static void inlineUnlockWithoutInstrumentation(Object o, Offset lockOffset) {
+    inlineUnlockHelper(o, lockOffset);
+  }  
+
+  @Inline
+  @NoNullCheck
+  @Unpreemptible
+  public static void inlineUnlockHelper(Object o, Offset lockOffset) {
     Word old = Magic.prepareWord(o, lockOffset); // FIXME: bad for PPC?
     Word id = old.and(TL_THREAD_ID_MASK.or(TL_STAT_MASK));
     Word tid = Word.fromIntSignExtend(RVMThread.getCurrentThread().getLockingId());
@@ -165,7 +214,20 @@ public final class ThinLock implements ThinLockConstants {
           return;
         }
       } else {
+
+        // Octet: before and after yielding, enter and leave the blocked state
+
+        if (Octet.getConfig().doCommunication()) {
+          Stats.blockCommLock.inc();
+          Communication.blockCommunicationRequests(true);
+        }
+
         RVMThread.yieldNoHandshake();
+
+        if (Octet.getConfig().doCommunication()) {
+          Communication.unblockCommunicationRequests();
+        }
+
       }
     }
   }
@@ -243,7 +305,19 @@ public final class ThinLock implements ThinLockConstants {
           return result;
         }
       }
+
+      // Octet: before and after yielding, enter and leave the blocked state
+
+      if (Octet.getConfig().doCommunication()) {
+        Stats.blockCommHoldsLock.inc();
+        Communication.blockCommunicationRequests(true);
+      }
+
       RVMThread.yieldNoHandshake();
+
+      if (Octet.getConfig().doCommunication()) {
+        Communication.unblockCommunicationRequests();
+      }
     }
   }
 

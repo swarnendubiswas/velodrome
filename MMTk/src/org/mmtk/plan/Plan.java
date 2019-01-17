@@ -648,7 +648,8 @@ public abstract class Plan implements Constants {
   /**
    *
    */
-  protected static boolean insideHarness = false;
+  // Octet: made public (to help stats that need to know)
+  public static boolean insideHarness = false;
 
   /**
    * Generic hook to allow benchmarks to be harnessed.  A plan may use
@@ -855,7 +856,9 @@ public abstract class Plan implements Constants {
    */
   public final boolean poll(boolean spaceFull, Space space) {
     if (collectionRequired(spaceFull, space)) {
-      if (space == metaDataSpace) {
+      // Octet: support allocation in uninterruptible code by deferring GC
+      if (space == metaDataSpace ||
+          VM.activePlan.mutator().isAllocatingInUninterruptibleCode()) {
         /* In general we must not trigger a GC on metadata allocation since
          * this is not, in general, in a GC safe point.  Instead we initiate
          * an asynchronous GC, which will occur at the next safe point.
@@ -870,7 +873,9 @@ public abstract class Plan implements Constants {
     }
 
     if (concurrentCollectionRequired()) {
-      if (space == metaDataSpace) {
+      // Octet: support allocation in uninterruptible code by deferring GC
+      if (space == metaDataSpace ||
+          VM.activePlan.mutator().isAllocatingInUninterruptibleCode()) {
         logPoll(space, "Triggering async concurrent collection");
         triggerInternalCollectionRequest();
         return false;

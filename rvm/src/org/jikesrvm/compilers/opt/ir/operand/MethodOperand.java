@@ -260,8 +260,9 @@ public final class MethodOperand extends Operand {
    * Refine the target information. Used to reduce the set of
    * targets for an invokevirtual.
    */
-  public void refine(RVMType targetClass) {
-    this.target = targetClass.findVirtualMethod(memRef.getName(), memRef.getDescriptor());
+  // Octet: Static cloning: Support multiple resolved methods for every method reference.
+  public void refine(RVMType targetClass, int context) {
+    this.target = targetClass.findVirtualMethod(memRef.getName(), memRef.getDescriptor(), context);
     setPreciseTarget();
   }
 

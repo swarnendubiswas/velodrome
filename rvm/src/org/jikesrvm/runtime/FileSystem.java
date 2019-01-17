@@ -17,6 +17,7 @@ import java.io.BufferedOutputStream;
 import java.io.FileDescriptor;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.io.PrintStream;
 import org.jikesrvm.VM;
 import org.jikesrvm.Callbacks;
@@ -205,15 +206,33 @@ public class FileSystem {
     FileInputStream fdIn = new FileInputStream(FileDescriptor.in);
     FileOutputStream fdOut = new FileOutputStream(FileDescriptor.out);
     FileOutputStream fdErr = new FileOutputStream(FileDescriptor.err);
-    System.setIn(new BufferedInputStream(fdIn));
-    System.setOut(new PrintStream(new BufferedOutputStream(fdOut, 128), true));
-    System.setErr(new PrintStream(new BufferedOutputStream(fdErr, 128), true));
+
+    // Octet: Store references to the streams in two places, one for the VM context and one for the application context
+
+    InputStream in = new BufferedInputStream(fdIn);
+    PrintStream out = new PrintStream(new BufferedOutputStream(fdOut, 128), true);
+    PrintStream err = new PrintStream(new BufferedOutputStream(fdErr, 128), true);
+
+    VMSystem.in = in;
+    VMSystem.out = out;
+    VMSystem.err = err;
+
+    System.setIn(in);
+    System.setOut(out);
+    System.setErr(err);
+
     Callbacks.addExitMonitor(new Callbacks.ExitMonitor() {
       @Override
       public void notifyExit(int value) {
         try {
           System.err.flush();
           System.out.flush();
+          if (System.err != VMSystem.err) {
+            VMSystem.err.flush();
+          }
+          if (System.out != VMSystem.out) {
+            VMSystem.out.flush();
+          }
         } catch (Throwable e) {
           VM.sysWriteln("vm: error flushing stdout, stderr");
         }

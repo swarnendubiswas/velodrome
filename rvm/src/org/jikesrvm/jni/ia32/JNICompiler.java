@@ -27,6 +27,7 @@ import org.jikesrvm.ia32.MachineCode;
 import org.jikesrvm.ia32.ThreadLocalState;
 import org.jikesrvm.jni.JNICompiledMethod;
 import org.jikesrvm.objectmodel.ObjectModel;
+import org.jikesrvm.octet.Octet;
 import org.jikesrvm.runtime.ArchEntrypoints;
 import org.jikesrvm.runtime.Entrypoints;
 import org.jikesrvm.runtime.Statics;
@@ -785,6 +786,11 @@ public abstract class JNICompiler implements BaselineConstants {
     doneLeaveJNIRef.resolve(asm);
     // END of code sequence to change state from IN_JNI to IN_JAVA
 
+    // Octet: unblock because we're calling from JNI into Java
+    if (Octet.getConfig().doCommunication()) {
+      asm.emitCALL_Abs(Magic.getTocPointer().plus(Entrypoints.octetUnblockCommunicationRequestsMethod.getOffset()));
+    }
+
     // status is now IN_JAVA. GC can not occur while we execute on a processor
     // in this state, so it is safe to access fields of objects.
     // RVM TR register has been restored and EBX contains a pointer to
@@ -899,6 +905,11 @@ public abstract class JNICompiler implements BaselineConstants {
     // save return values
     asm.emitPUSH_Reg(T0);
     asm.emitPUSH_Reg(T1);
+
+    // Octet: block again because we're exiting from Java back into JNI
+    if (Octet.getConfig().doCommunication()) {
+      asm.emitCALL_Abs(Magic.getTocPointer().plus(Entrypoints.octetBlockCommunicationRequestsMethod.getOffset()));
+    }
 
     // attempt to change the thread state to IN_JNI
     asm.emitMOV_Reg_Imm(T0, RVMThread.IN_JAVA);

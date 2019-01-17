@@ -12,20 +12,28 @@
  */
 package org.jikesrvm.runtime;
 
+import static org.jikesrvm.ia32.StackframeLayoutConstants.INVISIBLE_METHOD_ID;
+import static org.jikesrvm.ia32.StackframeLayoutConstants.STACKFRAME_SENTINEL_FP;
+
 import org.jikesrvm.ArchitectureSpecific.CodeArray;
 import org.jikesrvm.ArchitectureSpecific.DynamicLinkerHelper;
-import org.jikesrvm.VM;
 import org.jikesrvm.Constants;
+import org.jikesrvm.VM;
+import org.jikesrvm.classloader.Context;
+import org.jikesrvm.classloader.MethodReference;
 import org.jikesrvm.classloader.RVMClass;
 import org.jikesrvm.classloader.RVMMethod;
-import org.jikesrvm.classloader.MethodReference;
 import org.jikesrvm.compilers.common.CompiledMethod;
 import org.jikesrvm.compilers.common.CompiledMethods;
+import org.jikesrvm.octet.Octet;
+import org.jikesrvm.scheduler.RVMThread;
 import org.vmmagic.pragma.DynamicBridge;
 import org.vmmagic.pragma.Entrypoint;
 import org.vmmagic.pragma.NoInline;
 import org.vmmagic.unboxed.Address;
 import org.vmmagic.unboxed.Offset;
+
+// Octet: Static cloning: Various changes in this class to support multiple resolved methods for every method reference.
 
 /**
  * Implement lazy compilation.
@@ -43,7 +51,70 @@ public class DynamicLinker implements Constants {
   @Entrypoint
   static void lazyMethodInvoker() {
     DynamicLink dl = DL_Helper.resolveDynamicInvocation();
-    RVMMethod targMethod = DL_Helper.resolveMethodRef(dl);
+    MethodReference methodRef = dl.methodRef();
+    
+    Address callingFrame = Magic.getCallerFramePointer(Magic.getFramePointer());
+    int callingCompiledMethodId = Magic.getCompiledMethodID(callingFrame);
+    CompiledMethod ccm = CompiledMethods.getCompiledMethod(callingCompiledMethodId);
+    
+    // Velodrome: Context: Walk stack to find caller, note if it is application
+    RVMThread currentThread = RVMThread.getCurrentThread();
+    int resolvedContext = ccm.method.getStaticContext();
+    if (Context.isApplicationPrefix(methodRef.getType())) {
+      // I guess it is not necessary to do this for non-Octet threads, since they will probably not execute application 
+      // code
+      if (currentThread.isOctetThread()) {
+        Address fp = Magic.getFramePointer();
+        boolean atLeastOneAppMethod = false;
+        // Search for the topmost application frame/method
+        while (Magic.getCallerFramePointer(fp).NE(STACKFRAME_SENTINEL_FP)) {
+          int compiledMethodId = Magic.getCompiledMethodID(fp);
+          if (compiledMethodId != INVISIBLE_METHOD_ID) {
+            CompiledMethod compiledMethod = CompiledMethods.getCompiledMethod(compiledMethodId);
+            RVMMethod method = compiledMethod.getMethod();
+            if (!method.isNative() && Octet.shouldInstrumentMethod(method)) {
+              resolvedContext = method.getStaticContext();
+              atLeastOneAppMethod = true;
+              break;
+            }
+          }
+          fp = Magic.getCallerFramePointer(fp);
+        }
+        if (!atLeastOneAppMethod) { // First application method called
+          resolvedContext = Context.NONTRANS_CONTEXT; 
+        }
+      }
+    }
+    
+    RVMMethod targMethod = DL_Helper.resolveMethodRef(dl, resolvedContext);
+    
+    // Velodrome: Context: This is bad, but "methodRef" can be a library type, while the targMethod is an application method
+    if (currentThread.isOctetThread()) {
+      if (Context.isApplicationPrefix(targMethod.getDeclaringClass().getTypeRef()) && 
+          !Context.isApplicationPrefix(methodRef.getType())) {
+        Address fp = Magic.getFramePointer();
+        boolean atLeastOneAppMethod = false;
+        // Search for the topmost application frame/method
+        while (Magic.getCallerFramePointer(fp).NE(STACKFRAME_SENTINEL_FP)) {
+          int compiledMethodId = Magic.getCompiledMethodID(fp);
+          if (compiledMethodId != INVISIBLE_METHOD_ID) {
+            CompiledMethod compiledMethod = CompiledMethods.getCompiledMethod(compiledMethodId);
+            RVMMethod method = compiledMethod.getMethod();
+            if (!method.isNative() && Octet.shouldInstrumentMethod(method)) {
+              resolvedContext = method.getStaticContext();
+              atLeastOneAppMethod = true;
+              break;
+            }
+          }
+          fp = Magic.getCallerFramePointer(fp);
+        }
+        if (!atLeastOneAppMethod) { // First application method called
+          resolvedContext = Context.NONTRANS_CONTEXT; 
+        }
+      }
+      targMethod = DL_Helper.resolveMethodRef(dl, resolvedContext); // Recompute 
+    }
+
     DL_Helper.compileMethod(dl, targMethod);
     CodeArray code = targMethod.getCurrentEntryCodeArray();
     Magic.dynamicBridgeTo(code);                   // restore parameters and invoke
@@ -60,7 +131,7 @@ public class DynamicLinker implements Constants {
   @Entrypoint
   static void unimplementedNativeMethod() {
     DynamicLink dl = DL_Helper.resolveDynamicInvocation();
-    RVMMethod targMethod = DL_Helper.resolveMethodRef(dl);
+    RVMMethod targMethod = DL_Helper.resolveMethodRef(dl, Context.VM_CONTEXT);
     throw new UnsatisfiedLinkError(targMethod.toString());
   }
 
@@ -70,7 +141,7 @@ public class DynamicLinker implements Constants {
   @Entrypoint
   static void sysCallMethod() {
     DynamicLink dl = DL_Helper.resolveDynamicInvocation();
-    RVMMethod targMethod = DL_Helper.resolveMethodRef(dl);
+    RVMMethod targMethod = DL_Helper.resolveMethodRef(dl, Context.VM_CONTEXT);
     throw new UnsatisfiedLinkError(targMethod.toString() + " which is a SysCall");
   }
 
@@ -118,21 +189,21 @@ public class DynamicLinker implements Constants {
      * </pre>
      */
     @NoInline
-    static RVMMethod resolveMethodRef(DynamicLink dynamicLink) {
+    static RVMMethod resolveMethodRef(DynamicLink dynamicLink, int context) {
       // resolve symbolic method reference into actual method
       //
       MethodReference methodRef = dynamicLink.methodRef();
       if (dynamicLink.isInvokeSpecial()) {
-        return methodRef.resolveInvokeSpecial();
+        return methodRef.resolveInvokeSpecial(context);
       } else if (dynamicLink.isInvokeStatic()) {
-        return methodRef.resolve();
+        return methodRef.resolve(context);
       } else {
         // invokevirtual or invokeinterface
         VM.disableGC();
         Object targetObject = DynamicLinkerHelper.getReceiverObject();
         VM.enableGC();
         RVMClass targetClass = Magic.getObjectType(targetObject).asClass();
-        RVMMethod targetMethod = targetClass.findVirtualMethod(methodRef.getName(), methodRef.getDescriptor());
+        RVMMethod targetMethod = targetClass.findVirtualMethod(methodRef.getName(), methodRef.getDescriptor(), context);
         if (targetMethod == null) {
           throw new IncompatibleClassChangeError(targetClass.getDescriptor().classNameFromDescriptor());
         }

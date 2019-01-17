@@ -111,7 +111,8 @@ public final class PartialCallGraph implements Decayable, Reportable {
       unresolvedTargets.visitTargets(new UnResolvedWeightedCallTargets.Visitor() {
         @Override
         public void visit(MethodReference calleeRef, double weight) {
-          RVMMethod callee = calleeRef.getResolvedMember();
+          // Octet: Static cloning: Support multiple resolved methods for every method reference.
+          RVMMethod callee = calleeRef.getResolvedMember(fCaller.getStaticContext());
           if (callee != null) {
             pg.incrementEdge(fCaller, fBcIndex, callee, (float) weight);
           }

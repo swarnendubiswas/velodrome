@@ -57,6 +57,12 @@ public abstract class AnnotatedElement implements java.lang.reflect.AnnotatedEle
     }
   }
 
+  /** Octet: Static cloning: Support multiple resolved methods for every method reference. */
+  protected AnnotatedElement(AnnotatedElement ae) {
+    this.declaredAnnotations = ae.declaredAnnotations;
+    this.declaredAnnotationDatas = ae.declaredAnnotationDatas;
+  }
+
   /**
    * Read annotations from a class file and package in an array
    * @param constantPool the constantPool of the RVMClass object
@@ -167,6 +173,15 @@ public abstract class AnnotatedElement implements java.lang.reflect.AnnotatedEle
    */
   @Override
   public final boolean isAnnotationPresent(Class<? extends Annotation> annotationClass) {
+    // Octet: Avoid triggering classloading unnecessarily. Otherwise the opt compiler
+    // might call a custom classloader, violating the invariant that VM threads don't call application context code.
+    if (hasAnnotations() && // Has annotations,
+        declaredAnnotations == null && // but those annotations haven't been loaded yet.
+        Context.isVMPrefix(TypeReference.findOrCreate(annotationClass)) && // Annotation is VM context,
+        //((RVMMember)this).getDeclaringClass().getClassLoader() 
+        true /*((RVMMethod)this).getStaticContext() == Context.APP_CONTEXT*/) { // but method is application context.
+      return isAnnotationDeclared(TypeReference.findOrCreate(annotationClass));
+    }
     return getAnnotation(annotationClass) != null;
   }
 

@@ -14,6 +14,8 @@ package org.jikesrvm.compilers.opt.regalloc.ia32;
 
 import java.util.Enumeration;
 import java.util.Iterator;
+
+import org.jikesrvm.VM;
 import org.jikesrvm.classloader.TypeReference;
 import org.jikesrvm.compilers.opt.OptimizingCompilerException;
 import org.jikesrvm.compilers.opt.ir.Empty;
@@ -27,6 +29,7 @@ import org.jikesrvm.compilers.opt.ir.MIR_UnaryNoRes;
 import org.jikesrvm.compilers.opt.ir.IR;
 import org.jikesrvm.compilers.opt.ir.Instruction;
 import org.jikesrvm.compilers.opt.ir.Operator;
+
 import static org.jikesrvm.compilers.opt.ir.Operators.ADVISE_ESP;
 import static org.jikesrvm.compilers.opt.ir.Operators.BBEND;
 import static org.jikesrvm.compilers.opt.ir.Operators.CALL_SAVE_VOLATILE;
@@ -74,7 +77,9 @@ import org.jikesrvm.compilers.opt.ir.operand.ia32.IA32ConditionOperand;
 import org.jikesrvm.compilers.opt.regalloc.GenericStackManager;
 import org.jikesrvm.compilers.opt.regalloc.RegisterAllocatorState;
 import org.jikesrvm.ia32.ArchConstants;
+
 import static org.jikesrvm.ia32.StackframeLayoutConstants.STACKFRAME_ALIGNMENT;
+
 import org.jikesrvm.runtime.ArchEntrypoints;
 import org.jikesrvm.runtime.Entrypoints;
 import org.vmmagic.unboxed.Offset;
@@ -332,7 +337,8 @@ public abstract class StackManager extends GenericStackManager {
    * @param plg the prologue instruction
    */
   private void insertNormalStackOverflowCheck(Instruction plg) {
-    if (!ir.method.isInterruptible()) {
+    // Velodrome: Stack overflow: Insert stack overflow checks for all uninterruptible methods if assertions are turned on
+    if (!VM.VerifyAssertions && !ir.method.isInterruptible()) {
       plg.remove();
       return;
     }
@@ -369,7 +375,8 @@ public abstract class StackManager extends GenericStackManager {
    * @param plg the prologue instruction
    */
   private void insertBigFrameStackOverflowCheck(Instruction plg) {
-    if (!ir.method.isInterruptible()) {
+    // Velodrome: Stack overflow: Insert stack overflow checks for all uninterruptible methods if assertions are turned on
+    if (!VM.VerifyAssertions && !ir.method.isInterruptible()) {
       plg.remove();
       return;
     }

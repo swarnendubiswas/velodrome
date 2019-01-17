@@ -155,6 +155,14 @@ abstract class AbstractHashMapRVM<K, V> {
     }
   }
 
+  /** Octet: added removeAll operation */
+  public final void removeAll() {
+    for (int i = 0; i < buckets.length; i++) {
+      buckets[i] = null;
+    }
+    numElems = 0;
+  }
+  
   public final Iterator<V> valueIterator() {
     return new ValueIterator();
   }

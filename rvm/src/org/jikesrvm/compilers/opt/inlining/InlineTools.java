@@ -91,7 +91,8 @@ public abstract class InlineTools implements OptConstants {
       }
       while (!s.isEmpty()) {
         RVMClass subClass = s.pop();
-        if (subClass.findDeclaredMethod(callee.getName(), callee.getDescriptor()) != null) {
+        // Octet: Static cloning: Support multiple resolved methods for every method reference.
+        if (subClass.findDeclaredMethod(callee.getName(), callee.getDescriptor(), callee.getResolvedContext()) != null) {
           return false;        // found an overridding method
         }
         subClasses = subClass.getSubClasses();
@@ -222,7 +223,8 @@ public abstract class InlineTools implements OptConstants {
     // TODO: clean this hack up
     // Hack to inline java.lang.VMSystem.arraycopy in the case that
     // arg 0 isn't an Object
-    if (callee == Entrypoints.sysArrayCopy) {
+    // Octet: Static cloning: Simplified by just checking for a method reference instead of a resolved method.
+    if (callee.getMemberRef() == Entrypoints.sysArrayCopy) {
       Operand src = Call.getParam(state.getCallInstruction(), 0);
       return src.getType() != TypeReference.JavaLangObject;
     }

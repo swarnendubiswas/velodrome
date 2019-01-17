@@ -16,8 +16,11 @@ import java.io.DataInputStream;
 import java.io.IOException;
 import org.jikesrvm.VM;
 import org.jikesrvm.mm.mminterface.Barriers;
+import org.jikesrvm.octet.Octet;
 import org.jikesrvm.runtime.Magic;
 import org.jikesrvm.runtime.Statics;
+import org.jikesrvm.velodrome.Velodrome;
+import org.vmmagic.pragma.Inline;
 import org.vmmagic.pragma.Uninterruptible;
 import org.vmmagic.unboxed.Address;
 import org.vmmagic.unboxed.Extent;
@@ -49,6 +52,13 @@ public final class RVMField extends RVMMember {
    * Has the field been made traced?
    */
   private boolean madeTraced;
+
+  /** Octet: the offset of direct per-field metadata (currently for static fields only) */
+  private Offset metadataOffset = Offset.fromIntSignExtend(NO_OFFSET);
+  
+  /** Velodrome: Offset of additional header word */
+  private Offset writeMetadataOffset = Offset.fromIntSignExtend(NO_OFFSET);
+  private Offset readMetadataOffset = Offset.fromIntSignExtend(NO_OFFSET);
 
   /**
    * Create a field.
@@ -123,6 +133,84 @@ public final class RVMField extends RVMMember {
    */
   static RVMField createAnnotationField(TypeReference annotationClass, MemberReference memRef) {
     return new RVMField(annotationClass, memRef, (short) (ACC_PRIVATE | ACC_SYNTHETIC), null, 0, null);
+  }
+
+  // Octet: metadata offsets
+
+  @Uninterruptible
+  @Inline
+  public final boolean hasMetadataOffset() {
+    if (VM.VerifyAssertions) { VM._assert(Octet.getConfig().addHeaderWord()); }
+    return metadataOffset.toInt() != NO_OFFSET;
+  }
+
+  @Uninterruptible
+  @Inline
+  public final Offset getMetadataOffset() {
+    if (VM.VerifyAssertions) { VM._assert(hasMetadataOffset()); }
+    return metadataOffset;
+  }
+
+  @Uninterruptible
+  @Inline
+  public final void setMetadataOffset(Offset offset) {
+    if (VM.VerifyAssertions) { VM._assert(!hasMetadataOffset()); }
+    metadataOffset = offset;
+  }
+  
+  // Velodrome: Helper methods for read/write metadata offset
+  
+  /** Check the offset of the first word */ 
+  @Uninterruptible
+  @Inline
+  public final boolean hasVelodromeMetadataOffset() {
+    return hasWriteMetadataOffset();
+  }
+  
+  @Uninterruptible
+  @Inline
+  private final boolean hasWriteMetadataOffset() {
+    if (VM.VerifyAssertions) { VM._assert(Velodrome.addPerFieldVelodromeMetadata()); }
+    boolean result = writeMetadataOffset.toInt() != NO_OFFSET;
+    if (VM.VerifyAssertions && result) { VM._assert(readMetadataOffset.toInt() != NO_OFFSET); }
+    return result;
+  }
+  
+  @Uninterruptible
+  @Inline
+  public final Offset getWriteMetadataOffset() {
+    if (VM.VerifyAssertions) { VM._assert(hasWriteMetadataOffset()); }
+    return writeMetadataOffset;
+  }
+  
+  @Uninterruptible
+  @Inline
+  public final void setWriteMetadataOffset(Offset offset) {
+    if (VM.VerifyAssertions) { VM._assert(!hasWriteMetadataOffset()); }
+    writeMetadataOffset = offset;
+  }
+  
+  @Uninterruptible
+  @Inline
+  private final boolean hasReadMetadataOffset() {
+    if (VM.VerifyAssertions) { VM._assert(Velodrome.addPerFieldVelodromeMetadata()); }
+    boolean result = readMetadataOffset.toInt() != NO_OFFSET;
+    if (VM.VerifyAssertions && result) { VM._assert(writeMetadataOffset.toInt() != NO_OFFSET); }
+    return result;
+  }
+  
+  @Uninterruptible
+  @Inline
+  public final Offset getReadMetadataOffset() {
+    if (VM.VerifyAssertions) { VM._assert(hasReadMetadataOffset()); }
+    return readMetadataOffset;
+  }
+  
+  @Uninterruptible
+  @Inline
+  public final void setReadMetadataOffset(Offset offset) {
+    if (VM.VerifyAssertions) { VM._assert(!hasReadMetadataOffset()); }
+    readMetadataOffset = offset;
   }
 
   /**

@@ -13,6 +13,7 @@
 package org.jikesrvm.objectmodel;
 
 import org.jikesrvm.SizeConstants;
+import org.jikesrvm.UnimplementedError;
 import org.jikesrvm.runtime.Memory;
 
 /**
@@ -44,6 +45,11 @@ public abstract class FieldLayoutContext implements SizeConstants {
 
   /** Return the offset of a new field of the given size */
   abstract int nextOffset(int size, boolean isReference);
+  
+  /** Velodrome: for allocating direct field metadata */
+  int nextOffsetUnaligned(int size) {
+    throw new UnimplementedError();
+  }
 
   /* *****************************************************************
   *                        Initialization

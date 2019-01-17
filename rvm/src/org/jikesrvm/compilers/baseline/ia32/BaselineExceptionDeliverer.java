@@ -14,14 +14,19 @@ package org.jikesrvm.compilers.baseline.ia32;
 
 import org.jikesrvm.ArchitectureSpecific;
 import org.jikesrvm.VM;
+import org.jikesrvm.classloader.Context;
 import org.jikesrvm.classloader.NormalMethod;
+import org.jikesrvm.classloader.RVMMethod;
 import org.jikesrvm.compilers.baseline.BaselineCompiledMethod;
 import org.jikesrvm.compilers.common.CompiledMethod;
 import org.jikesrvm.ia32.BaselineConstants;
 import org.jikesrvm.objectmodel.ObjectModel;
+import org.jikesrvm.octet.Octet;
 import org.jikesrvm.runtime.ExceptionDeliverer;
 import org.jikesrvm.runtime.Magic;
 import org.jikesrvm.scheduler.RVMThread;
+import org.jikesrvm.velodrome.TransactionalHBGraph;
+import org.jikesrvm.velodrome.Velodrome;
 import org.vmmagic.pragma.Unpreemptible;
 import org.vmmagic.unboxed.Address;
 import org.vmmagic.unboxed.Offset;
@@ -95,7 +100,12 @@ public abstract class BaselineExceptionDeliverer extends ExceptionDeliverer impl
                   0)) - BYTES_IN_ADDRESS).loadAddress());
         }
         if (ObjectModel.holdsLock(lock, RVMThread.getCurrentThread())) {
-          ObjectModel.genericUnlock(lock);
+          // Velodrome: Decide which lock method to use
+          if (Octet.shouldInstrumentMethod(method)) {
+            ObjectModel.genericUnlock(lock);
+          } else {
+            ObjectModel.genericUnlockWithoutInstrumentation(lock);
+          }
         }
       }
     }
@@ -108,7 +118,19 @@ public abstract class BaselineExceptionDeliverer extends ExceptionDeliverer impl
     }
 
     registers.unwindStackFrame();
+
+    // Velodrome: Decrement the transaction depth for the current thread
+    RVMMethod rMethod = compiledMethod.getMethod();
+    if (!rMethod.isNative()) {
+      if (Octet.shouldInstrumentMethod(rMethod) && (Velodrome.methodsAsTransactions() || rMethod.isSynchronized() && Velodrome.syncBlocksAsTransactions())) {
+        if (Context.isTRANSContext(rMethod.getStaticContext()) && Context.isNONTRANSContext(rMethod.getResolvedContext())) {
+          TransactionalHBGraph.handleExceptionDuringStackUnwinding(rMethod);
+        }
+      }
+    }
+
   }
+
 }
 
 

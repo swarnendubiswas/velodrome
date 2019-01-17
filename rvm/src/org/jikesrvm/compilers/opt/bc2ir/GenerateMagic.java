@@ -73,6 +73,7 @@ import static org.jikesrvm.compilers.opt.ir.Operators.WRITE_FLOOR;
 import org.jikesrvm.VM;
 import org.jikesrvm.ArchitectureSpecificOpt.GenerateMachineSpecificMagic;
 import org.jikesrvm.classloader.Atom;
+import org.jikesrvm.classloader.Context;
 import org.jikesrvm.classloader.RVMField;
 import org.jikesrvm.classloader.MemberReference;
 import org.jikesrvm.classloader.MethodReference;
@@ -522,7 +523,8 @@ public class GenerateMagic implements TIBLayoutConstants  {
         Call.setResult(call, op0);
         bc2ir.push(op0.copyD2U(), returnType);
       }
-      Call.setMethod(call, MethodOperand.STATIC(meth, meth.peekResolvedMethod()));
+      // Octet: Static cloning: Support multiple resolved methods for every method reference.
+      Call.setMethod(call, MethodOperand.STATIC(meth, meth.peekResolvedMethod(Context.VM_CONTEXT)));
       bc2ir.appendInstruction(call);
     } else if (meth.isSpecializedInvoke()) {
       // The callsite looks like              RETURN = INVOKE (ID, OBJECT, P0, P1 .. PN)

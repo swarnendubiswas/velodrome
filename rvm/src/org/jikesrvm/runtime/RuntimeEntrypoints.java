@@ -14,14 +14,14 @@ package org.jikesrvm.runtime;
 
 import org.jikesrvm.ArchitectureSpecific;
 import org.jikesrvm.ArchitectureSpecific.Registers;
-import org.jikesrvm.VM;
 import org.jikesrvm.Constants;
 import org.jikesrvm.Services;
+import org.jikesrvm.VM;
+import org.jikesrvm.classloader.DynamicTypeCheck;
+import org.jikesrvm.classloader.MemberReference;
 import org.jikesrvm.classloader.RVMArray;
 import org.jikesrvm.classloader.RVMClass;
-import org.jikesrvm.classloader.DynamicTypeCheck;
 import org.jikesrvm.classloader.RVMField;
-import org.jikesrvm.classloader.MemberReference;
 import org.jikesrvm.classloader.RVMMethod;
 import org.jikesrvm.classloader.RVMType;
 import org.jikesrvm.classloader.TypeReference;
@@ -31,12 +31,14 @@ import org.jikesrvm.mm.mminterface.Barriers;
 import org.jikesrvm.mm.mminterface.MemoryManager;
 import org.jikesrvm.objectmodel.ObjectModel;
 import org.jikesrvm.objectmodel.TIB;
+import org.jikesrvm.octet.Octet;
 import org.jikesrvm.scheduler.RVMThread;
 import org.vmmagic.pragma.Entrypoint;
 import org.vmmagic.pragma.Inline;
 import org.vmmagic.pragma.NoInline;
 import org.vmmagic.pragma.Pure;
 import org.vmmagic.pragma.Uninterruptible;
+import org.vmmagic.pragma.UninterruptibleNoWarn;
 import org.vmmagic.pragma.Unpreemptible;
 import org.vmmagic.pragma.UnpreemptibleNoWarn;
 import org.vmmagic.unboxed.Address;
@@ -170,8 +172,19 @@ public class RuntimeEntrypoints implements Constants, ArchitectureSpecific.Stack
    * Perform aastore bytecode
    */
   @Entrypoint
+  // Octet: need this annotation to avoid stopping for GC at this method's yieldpoints
+  // Octet: TODO: look at this issue again, especially w.r.t. new way of handling generational write barriers
+  @UninterruptibleNoWarn
   static void aastore(Object[] arrayRef, int index, Object value) throws ArrayStoreException, ArrayIndexOutOfBoundsException {
-    checkstore(arrayRef, value);
+    // Octet: It causes problems with Octet to have interruptible code before an object access, so let's disable GC here.
+    MemoryManager.startAllocatingInUninterruptibleCode();
+    // Octet: TODO: Is it really okay to call an interruptible method here?  It could cause a safe point to execute.
+    try {
+      checkstore(arrayRef, value);
+    } finally {
+      // Octet: TODO: trying this here, to see if it helps recent failures related to GC apparently not being able to run
+      MemoryManager.stopAllocatingInUninterruptibleCode();
+    }
     int nelts = ObjectModel.getArrayLength(arrayRef);
     if (index >=0 && index < nelts) {
       Services.setArrayUninterruptible(arrayRef, index, value);
@@ -426,6 +439,7 @@ public class RuntimeEntrypoints implements Constants, ArchitectureSpecific.Stack
    * @param obj the object to clone
    * @return the cloned object
    */
+  // Octet: Static cloning: TODO: need to handle the possibility of Octet barriers being needed here 
   public static Object clone(Object obj) throws OutOfMemoryError, CloneNotSupportedException {
     RVMType type = Magic.getObjectType(obj);
     if (type.isArrayType()) {
@@ -632,6 +646,8 @@ public class RuntimeEntrypoints implements Constants, ArchitectureSpecific.Stack
   @Entrypoint
   static void unexpectedAbstractMethodCall() {
     VM.sysWrite("RuntimeEntrypoints.unexpectedAbstractMethodCall\n");
+    // Velodrome: Context: Added this to aid in debugging
+    RVMThread.dumpStack();
     throw new AbstractMethodError();
   }
 
@@ -696,6 +712,11 @@ public class RuntimeEntrypoints implements Constants, ArchitectureSpecific.Stack
     Registers exceptionRegisters = myThread.getExceptionRegisters();
     if (false) VM.sysWriteln("we have exception registers = ",Magic.objectAsAddress(exceptionRegisters));
 
+    // Velodrome: Stack overflow: Fail assertion for stack overflow. How can we do this better?
+    if (VM.VerifyAssertions && (trapCode == TRAP_STACK_OVERFLOW || trapCode == TRAP_STACK_OVERFLOW_FATAL)) {
+      VM.sysFail("Stack overflow error");
+    }
+
     if ((trapCode == TRAP_STACK_OVERFLOW || trapCode == TRAP_JNI_STACK) &&
         myThread.getStack().length < (STACK_SIZE_MAX >> LOG_BYTES_IN_ADDRESS) &&
         !myThread.hasNativeStackFrame()) {
@@ -722,7 +743,8 @@ public class RuntimeEntrypoints implements Constants, ArchitectureSpecific.Stack
 
     // Sanity checking.
     // Hardware traps in uninterruptible code should be considered hard failures.
-    if (!VM.sysFailInProgress()) {
+    // Octet: support tolerating exceptions in uninterruptible code
+    if (!Octet.tolerateExceptionsInUninterruptibleCode() && !VM.sysFailInProgress()) {
       Address fp = exceptionRegisters.getInnermostFramePointer();
       int compiledMethodId = Magic.getCompiledMethodID(fp);
       if (compiledMethodId != INVISIBLE_METHOD_ID) {
@@ -762,6 +784,11 @@ public class RuntimeEntrypoints implements Constants, ArchitectureSpecific.Stack
       }
     }
 
+    // Octet: support tolerating exceptions in uninterruptible code
+    if (Octet.tolerateExceptionsInUninterruptibleCode()) {
+      MemoryManager.startAllocatingInUninterruptibleCode();
+    }
+
     Throwable exceptionObject;
     switch (trapCode) {
       case TRAP_NULL_POINTER:
@@ -792,6 +819,11 @@ public class RuntimeEntrypoints implements Constants, ArchitectureSpecific.Stack
         break;
     }
 
+    // Octet: support tolerating exceptions in uninterruptible code
+    if (Octet.tolerateExceptionsInUninterruptibleCode()) {
+      MemoryManager.stopAllocatingInUninterruptibleCode();
+    }
+
     VM.disableGC();  // VM.enableGC() is called when the exception is delivered.
     deliverException(exceptionObject, exceptionRegisters);
   }
@@ -810,6 +842,14 @@ public class RuntimeEntrypoints implements Constants, ArchitectureSpecific.Stack
   @Entrypoint
   static void unlockAndThrow(Object objToUnlock, Throwable objToThrow) {
     ObjectModel.genericUnlock(objToUnlock);
+    athrow(objToThrow);
+  }
+  
+  // Velodrome: Uninstrumented version
+  @NoInline
+  @Entrypoint
+  static void unlockAndThrowWithoutInstrumentation(Object objToUnlock, Throwable objToThrow) {
+    ObjectModel.genericUnlockWithoutInstrumentation(objToUnlock);
     athrow(objToThrow);
   }
 
@@ -912,6 +952,8 @@ public class RuntimeEntrypoints implements Constants, ArchitectureSpecific.Stack
     BootRecord.the_boot_record.debugRequestedOffset = Entrypoints.debugRequestedField.getOffset();
   }
 
+  // Octet: Static cloning: Simplify method resolution below by simply ignoring it, since the method isn't used.
+
   /**
    * Build a multi-dimensional array.
    * @param methodId  TODO document me
@@ -920,8 +962,8 @@ public class RuntimeEntrypoints implements Constants, ArchitectureSpecific.Stack
    * @return array object
    */
   public static Object buildMultiDimensionalArray(int methodId, int[] numElements, RVMArray arrayType) {
-    RVMMethod method = MemberReference.getMemberRef(methodId).asMethodReference().peekResolvedMethod();
-    if (VM.VerifyAssertions) VM._assert(method != null);
+    RVMMethod method = null;//MemberReference.getMemberRef(methodId).asMethodReference().peekResolvedMethod(null);
+    //if (VM.VerifyAssertions) VM._assert(method != null);
     return buildMDAHelper(method, numElements, 0, arrayType);
   }
 
@@ -934,8 +976,8 @@ public class RuntimeEntrypoints implements Constants, ArchitectureSpecific.Stack
    * @return array object
    */
   public static Object buildTwoDimensionalArray(int methodId, int dim0, int dim1, RVMArray arrayType) {
-    RVMMethod method = MemberReference.getMemberRef(methodId).asMethodReference().peekResolvedMethod();
-    if (VM.VerifyAssertions) VM._assert(method != null);
+    RVMMethod method = null;//MemberReference.getMemberRef(methodId).asMethodReference().peekResolvedMethod(null);
+    //if (VM.VerifyAssertions) VM._assert(method != null);
 
     if (!arrayType.isInstantiated()) {
       arrayType.resolve();
@@ -1010,6 +1052,7 @@ public class RuntimeEntrypoints implements Constants, ArchitectureSpecific.Stack
     if (VM.TraceExceptionDelivery) {
       VM.sysWriteln("RuntimeEntrypoints.deliverException() entered; just got an exception object.");
     }
+    
     //VM.sysWriteln("throwing exception!");
     //RVMThread.dumpStack();
 
@@ -1027,6 +1070,7 @@ public class RuntimeEntrypoints implements Constants, ArchitectureSpecific.Stack
       if (!hijackedCalleeFp.isZero() && hijackedCalleeFp.LE(fp)) {
         leapfroggedReturnBarrier = true;
       }
+
       int compiledMethodId = Magic.getCompiledMethodID(fp);
       if (compiledMethodId != INVISIBLE_METHOD_ID) {
         CompiledMethod compiledMethod = CompiledMethods.getCompiledMethod(compiledMethodId);
@@ -1034,18 +1078,20 @@ public class RuntimeEntrypoints implements Constants, ArchitectureSpecific.Stack
         Address ip = exceptionRegisters.getInnermostInstructionAddress();
         Offset ipOffset = compiledMethod.getInstructionOffset(ip);
         int catchBlockOffset = compiledMethod.findCatchBlockForInstruction(ipOffset, exceptionType);
-
+        
         if (catchBlockOffset >= 0) {
           // found an appropriate catch block
           if (VM.TraceExceptionDelivery) {
             VM.sysWriteln("found one; delivering.");
           }
+
           if (leapfroggedReturnBarrier) {
             RVMThread t = RVMThread.getCurrentThread();
             if (RVMThread.DEBUG_STACK_TRAMPOLINE) VM.sysWriteln("leapfrogged...");
             t.deInstallStackTrampoline();
           }
           Address catchBlockStart = compiledMethod.getInstructionAddress(Offset.fromIntSignExtend(catchBlockOffset));
+          
           exceptionDeliverer.deliverException(compiledMethod, catchBlockStart, exceptionObject, exceptionRegisters);
           if (VM.VerifyAssertions) VM._assert(NOT_REACHED);
         }

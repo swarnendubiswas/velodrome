@@ -435,6 +435,8 @@ public final class RVMArray extends RVMType implements Constants, ClassLoaderCon
     /* Set GC metadata for this type */
     boolean isRefArray = elementType.isReferenceType();
     referenceOffsets = isRefArray ? REFARRAY_OFFSET_ARRAY : NOREFS_OFFSET_ARRAY;
+    // Velodrome: Initialize array of metadata references
+    velodromeMetadataOffsets = isRefArray ? REFARRAY_OFFSET_ARRAY : NOREFS_OFFSET_ARRAY;
 
     state = CLASS_LOADED;
 

@@ -12,19 +12,27 @@
  */
 package org.mmtk.plan.generational;
 
-import org.mmtk.plan.*;
-import org.mmtk.policy.CopyLocal;
-import org.mmtk.policy.Space;
-import org.mmtk.utility.HeaderByte;
-import org.mmtk.utility.deque.*;
-import org.mmtk.utility.alloc.Allocator;
-import org.mmtk.utility.statistics.Stats;
-import org.mmtk.vm.VM;
 import static org.mmtk.plan.generational.Gen.USE_OBJECT_BARRIER_FOR_AASTORE;
 import static org.mmtk.plan.generational.Gen.USE_OBJECT_BARRIER_FOR_PUTFIELD;
 
-import org.vmmagic.pragma.*;
-import org.vmmagic.unboxed.*;
+import org.mmtk.plan.MutatorContext;
+import org.mmtk.plan.StopTheWorldMutator;
+import org.mmtk.policy.CopyLocal;
+import org.mmtk.policy.Space;
+import org.mmtk.utility.HeaderByte;
+import org.mmtk.utility.alloc.Allocator;
+import org.mmtk.utility.deque.AddressPairDeque;
+import org.mmtk.utility.deque.ObjectReferenceDeque;
+import org.mmtk.utility.deque.WriteBuffer;
+import org.mmtk.utility.statistics.Stats;
+import org.mmtk.vm.VM;
+import org.vmmagic.pragma.Inline;
+import org.vmmagic.pragma.NoInline;
+import org.vmmagic.pragma.Uninterruptible;
+import org.vmmagic.unboxed.Address;
+import org.vmmagic.unboxed.ObjectReference;
+import org.vmmagic.unboxed.Offset;
+import org.vmmagic.unboxed.Word;
 
 /**
  * This abstract class implements <i>per-mutator thread</i> behavior
@@ -156,6 +164,13 @@ import org.vmmagic.unboxed.*;
     VM.barriers.objectReferenceWrite(src, tgt, metaDataA, metaDataB, mode);
   }
 
+  /** Octet: "pre-barrier" that performs just the barrier without actually doing the write */
+  @Inline
+  public final void objectReferencePreWrite(ObjectReference src, Address slot,
+      ObjectReference tgt, Word metaDataA,
+      Word metaDataB, int mode) {
+    fastPath(src, slot, tgt, mode);
+  }
 
   /**
    * Perform the root write barrier fast path, which may involve remembering

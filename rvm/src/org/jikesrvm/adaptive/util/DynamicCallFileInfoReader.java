@@ -20,6 +20,7 @@ import java.util.StringTokenizer;
 import org.jikesrvm.VM;
 import org.jikesrvm.adaptive.controller.Controller;
 import org.jikesrvm.adaptive.database.callgraph.PartialCallGraph;
+import org.jikesrvm.classloader.Context;
 import org.jikesrvm.classloader.RVMClassLoader;
 import org.jikesrvm.classloader.MemberReference;
 import org.jikesrvm.classloader.RVMMethod;
@@ -131,10 +132,17 @@ public class DynamicCallFileInfoReader {
    * @param ref The MethodReference
    * @return The RVMMethod, or {@code null} on failure.
    */
+  // Octet: Static cloning: Support multiple resolved methods for every method reference.
   private static RVMMethod getMethod(MethodReference ref) {
+    // Velodrome: Context: Pass the appropriate context based on whether a method reference is supposed to be non-atomic
+    int context = Context.TRANS_CONTEXT;
+    if (ref.isNonAtomic) {
+      context = Context.NONTRANS_CONTEXT;
+    }
+
     if (ref.getType().getClassLoader() == RVMClassLoader.getApplicationClassLoader()) {
       try {
-        return ref.resolve();
+        return ref.resolve(context);
       } catch (NoClassDefFoundError e) {
         if (Controller.options.BULK_COMPILATION_VERBOSITY >= 1)
           VM.sysWriteln("Warning: could not define class: " + ref.getType());
@@ -145,7 +153,7 @@ public class DynamicCallFileInfoReader {
         return null;
       }
     } else {
-      return ref.getResolvedMember();
+      return ref.getResolvedMember(context);
     }
   }
 }

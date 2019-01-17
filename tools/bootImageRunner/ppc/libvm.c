@@ -1210,6 +1210,8 @@ createVM(void)
     bootRecord.bootImageRMapStart   = (Address) bootRMapRegion;
     bootRecord.bootImageRMapEnd     = (Address) bootRMapRegion + roundedRMapRegionSize;
     bootRecord.verboseBoot      = verboseBoot;
+    // Velodrome: Adding a non-standard argument to identify benchmark category
+    bootRecord.benchmarkCategory = benchmarkCategory;
 
     // set host o/s linkage information into boot record
     //

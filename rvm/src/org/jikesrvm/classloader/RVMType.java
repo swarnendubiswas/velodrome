@@ -12,10 +12,10 @@
  */
 package org.jikesrvm.classloader;
 
-import org.jikesrvm.VM;
+import org.jikesrvm.ArchitectureSpecific.CodeArray;
 import org.jikesrvm.Constants;
 import org.jikesrvm.SizeConstants;
-import org.jikesrvm.ArchitectureSpecific.CodeArray;
+import org.jikesrvm.VM;
 import org.jikesrvm.mm.mminterface.AlignmentEncoding;
 import org.jikesrvm.mm.mminterface.MemoryManager;
 import org.jikesrvm.objectmodel.TIB;
@@ -275,6 +275,16 @@ public abstract class RVMType extends AnnotatedElement
     TIB tib = MemoryManager.newTIB(0, AlignmentEncoding.ALIGN_CODE_NONE);
     tib.setType(this);
     Statics.setSlotContents(getTibOffset(), tib);
+    
+    // Velodrome: TODO: Checking for TIB over here. But it doesn't work, there is a NPE
+    // while dereferencing tib.
+//    if (this.getDescriptor() == Velodrome.readMapDescriptor) {
+//      VM.sysWrite("Type descriptor:", this.getDescriptor());
+//      VM.sysWriteln("Read map TIB address:", ObjectReference.fromObject(tib));
+//    } else if (this.getDescriptor() == Velodrome.transactionDescriptor) {
+//      VM.sysWrite("Type descriptor:", this.getDescriptor());
+//      VM.sysWriteln("Transaction TIB address:", ObjectReference.fromObject(tib));
+//    } 
   }
 
   /**
@@ -632,15 +642,21 @@ public abstract class RVMType extends AnnotatedElement
    * @param memberDescriptor method descriptor - something like "I" or "()I"
    * @return method description (null --> not found)
    */
-  public final RVMMethod findVirtualMethod(Atom memberName, Atom memberDescriptor) {
+  // Octet: Static cloning: Support multiple resolved methods for every method reference.
+  public final RVMMethod findVirtualMethod(Atom memberName, Atom memberDescriptor, int context) {
     if (VM.VerifyAssertions) VM._assert(isResolved());
     RVMMethod[] methods = getVirtualMethods();
+    boolean foundSomething = false;
     for (int i = 0, n = methods.length; i < n; ++i) {
       RVMMethod method = methods[i];
       if (method.getName() == memberName && method.getDescriptor() == memberDescriptor) {
-        return method;
+        foundSomething = true;
+        if (Context.isMatch(method, context, /* resolve = */ false)) { // Velodrome: Context: Added a parameter
+          return method;
+        }
       }
     }
+    if (VM.VerifyAssertions) { VM._assert(!foundSomething); }
     return null;
   }
 
@@ -856,6 +872,9 @@ public abstract class RVMType extends AnnotatedElement
    * reference-containing instance fields
    */
   protected int[] referenceOffsets;
+  
+  // Velodrome: Array storing offsets of Velodrome metadata reference fields
+  protected int[] velodromeMetadataOffsets;
 
   /**
    * Record the allocator information the memory manager holds about this type.
@@ -896,4 +915,12 @@ public abstract class RVMType extends AnnotatedElement
     if (VM.VerifyAssertions) VM._assert(isResolved());
     return referenceOffsets;
   }
+  
+  // Velodrome: Return the array of metadata reference offsets
+  @Uninterruptible
+  public int[] getVelodromeMetadataOffsets() {
+    if (VM.VerifyAssertions) { VM._assert(isResolved()); }
+    return velodromeMetadataOffsets;
+  }
+  
 }

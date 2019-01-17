@@ -1052,9 +1052,6 @@ Check to make sure all required properties are specified. This includes properti
         <filter token="_PORTABLE_NATIVE_SYNC_" value="${config.portable-native-sync}"/>
         <filter token="_RVM_WITH_HARMONY_" value="${pp_RVM_WITH_HARMONY}"/>
         <filter token="_RVM_WITH_GNU_CLASSPATH_" value="${pp_RVM_WITH_GNU_CLASSPATH}"/>
-
-      	<!-- Octet: build-time option: configuration class -->
-      	<filter token="_RVM_WITH_CONFIG_CLASS_" value="${config.config-class}"/>
       </filterset>
     </copy>
 
@@ -1566,10 +1563,9 @@ Check to make sure all required properties are specified. This includes properti
 
     <echo message="Building bootimage. Output redirected to : ${build.base}/BootImageWriterOutput.txt"/>
     <echo message="MMTk properties = ${mmtk.properties}"/>
-  	<!-- Octet: need more heap space to build some configs (Octet + stats + FullAdaptive); was 500M -->
     <java classname="org.jikesrvm.tools.bootImageWriter.BootImageWriter"
           fork="yes"
-          maxmemory="800M"
+          maxmemory="500M"
           failonerror="false"
           resultproperty="bootimage-writer.result"
           dir="${basedir}/tools/bootImageWriter/src">

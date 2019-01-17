@@ -12,6 +12,7 @@
  */
 package org.mmtk.vm;
 
+import org.mmtk.plan.TraceLocal;
 import org.vmmagic.pragma.Uninterruptible;
 import org.vmmagic.unboxed.*;
 
@@ -255,4 +256,26 @@ public abstract class ObjectModel {
   static Offset arrayBaseOffsetTrapdoor(ObjectModel o) {
     return o.getArrayBaseOffset();
   }
+  
+  // Velodrome: Methods to implement weak tracing of metadata references
+  
+  public abstract void addMetadataSlotsToQueue(ObjectReference objRef);
+  public abstract void traceMetadataReferencesDuringFullHeap(TraceLocal trace, Address mdSlot);
+  public abstract void updateMetadataSlotsDuringNursery(TraceLocal trace, Address mdSlot);
+  public abstract void traceStaticMetadataSlots();
+  // Velodrome: Trace lock access metadata
+  public abstract void traceLockMetadata(ObjectReference object, TraceLocal trace); 
+  public abstract void traceLockMetadata(ObjectReference object);
+  public abstract void traceObjectLevelMetadata(ObjectReference object);
+  
+  // Velodrome: Helper methods
+  public abstract boolean checkForReadmap(ObjectReference newObject, ObjectReference oldObject);
+  public abstract boolean checkForReadmapDuringTracing(ObjectReference source, Address slot, ObjectReference newObj);
+  public abstract boolean checkForReadmapFromRoot(Address slot, ObjectReference newObj, ObjectReference oldObj);
+  public abstract void flushRememberedSets();
+  public abstract boolean testOctetThreadsBeforeGCStarts();
+  public abstract boolean validRef(ObjectReference objRef);
+  public abstract boolean addPerFieldVelodromeMetadata();
+  public abstract int getNumStaticMetadataSlots();
+
 }

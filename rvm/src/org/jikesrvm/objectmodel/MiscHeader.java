@@ -15,7 +15,11 @@ package org.jikesrvm.objectmodel;
 import org.jikesrvm.VM;
 import org.jikesrvm.Constants;
 import org.jikesrvm.mm.mminterface.MemoryManagerConstants;
+import org.jikesrvm.octet.OctetState;
+import org.jikesrvm.octet.Octet;
+import org.jikesrvm.octet.Stats;
 import org.jikesrvm.runtime.Magic;
+import org.jikesrvm.velodrome.Velodrome;
 import org.vmmagic.pragma.Entrypoint;
 import org.vmmagic.pragma.Interruptible;
 import org.vmmagic.pragma.Uninterruptible;
@@ -43,6 +47,16 @@ public final class MiscHeader implements Constants, MiscHeaderConstants {
   static final Offset OBJECT_DEATH_OFFSET = OBJECT_OID_OFFSET.plus(BYTES_IN_ADDRESS);
   /* offset from object ref to .link field, in bytes */
   static final Offset OBJECT_LINK_OFFSET = OBJECT_DEATH_OFFSET.plus(BYTES_IN_ADDRESS);
+
+  /** Octet: extra header word's offset */
+  public static final Offset OCTET_OFFSET = MISC_HEADER_START;
+  
+  /** Velodrome: Offset for the word */
+  public static final Offset VELODROME_OFFSET = OCTET_OFFSET.plus(OCTET_HEADER_BYTES);
+  
+  /** Velodrome: Offset for the read/write metadata for array accesses */
+  public static final Offset VELODROME_WRITE_OFFSET = VELODROME_OFFSET.plus(VELODROME_HEADER_BYTES);
+  public static final Offset VELODROME_READ_OFFSET = VELODROME_WRITE_OFFSET.plus(VELODROME_WRITE_METADATA_BYTES);
 
   /////////////////////////
   // Support for YYY (an example of how to add a word to all objects)
@@ -87,13 +101,36 @@ public final class MiscHeader implements Constants, MiscHeaderConstants {
    */
   @Uninterruptible
   public static void initializeHeader(Object obj, TIB tib, int size, boolean isScalar) {
+    
+    // Octet: initialize the metadata
+    if (Octet.getConfig().instrumentAllocation()) {
+      //if (VM.VerifyAssertions) { VM._assert(Octet.headerWord()); }
+      Word metadata =  OctetState.getInitial();
+      OctetState.check(metadata);
+      ObjectReference.fromObject(obj).toAddress().store(metadata, MiscHeader.OCTET_OFFSET);
+      Stats.Alloc.inc();
+    }
+    
+    // Velodrome: initialize the metadata
+    if (Velodrome.addMiscHeader()) {
+      ObjectReference.fromObject(obj).toAddress().store(Word.zero(), VELODROME_OFFSET);
+    }
+    // Velodrome: Initialize the array read/write metadata words
+    if (Velodrome.instrumentArrays()) {
+      ObjectReference.fromObject(obj).toAddress().store(Word.zero(), VELODROME_WRITE_OFFSET);
+      ObjectReference.fromObject(obj).toAddress().store(Word.zero(), VELODROME_READ_OFFSET);
+    }
+    
+    
     /* Only perform initialization when it is required */
+    /*
     if (MemoryManagerConstants.GENERATE_GC_TRACE) {
       Address ref = Magic.objectAsAddress(obj);
       ref.store(oid, OBJECT_OID_OFFSET);
       ref.store(time, OBJECT_DEATH_OFFSET);
       oid = oid.plus(Word.fromIntSignExtend((size - GC_TRACING_HEADER_BYTES) >> LOG_BYTES_IN_ADDRESS));
     }
+    */
   }
 
   /**
@@ -107,6 +144,23 @@ public final class MiscHeader implements Constants, MiscHeaderConstants {
   @Interruptible("Only called during boot iamge creation")
   public static void initializeHeader(BootImageInterface bootImage, Address ref, TIB tib, int size,
                                       boolean isScalar) {
+    
+    // Octet: initialize boot image objects
+    if (Octet.getConfig().instrumentAllocation()) {
+      Word metadata = OctetState.getInitial();
+      bootImage.setAddressWord(ref.plus(OCTET_OFFSET), metadata, false, false);
+    }
+    
+    // Velodrome: initialize boot image objects
+    if (Velodrome.addMiscHeader()) {
+      bootImage.setAddressWord(ref.plus(VELODROME_OFFSET), Word.zero(), false, false);
+    }
+    // Velodrome: Initialize the array read/write metadata words
+    if (Velodrome.instrumentArrays()) {
+      bootImage.setAddressWord(ref.plus(VELODROME_WRITE_METADATA_BYTES), Word.zero(), false, false);
+      bootImage.setAddressWord(ref.plus(VELODROME_READ_METADATA_BYTES), Word.zero(), false, false);
+    }
+    
     /* Only perform initialization when it is required */
     if (MemoryManagerConstants.GENERATE_GC_TRACE) {
       bootImage.setAddressWord(ref.plus(OBJECT_OID_OFFSET), oid, false, false);

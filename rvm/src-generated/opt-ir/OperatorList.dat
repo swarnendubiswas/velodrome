@@ -470,9 +470,10 @@ none
 
 
 # memory fence
+# Octet: LATER: We added the "acquire" attribute here. This seems like a Jikes bug.
 FENCE
 Empty
-memAsLoad | memAsStore | release
+memAsLoad | memAsStore | release | acquire
 
 
 

@@ -487,7 +487,8 @@ public final class RVMAnnotation {
         Atom.findOrCreateAsciiAtom("()" + TypeReference.findOrCreate(valueType).getName())
     ).asMethodReference();
     try {
-      return methRef.resolve().getAnnotationDefault();
+      // Octet: Static cloning: Support multiple resolved methods for every method reference.
+      return methRef.resolve(Context.VM_CONTEXT).getAnnotationDefault();
     } catch (Throwable t) {
       return NO_VALUE;
     }

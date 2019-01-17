@@ -12,6 +12,9 @@
  */
 package org.jikesrvm.classloader;
 
+import static org.jikesrvm.ia32.StackframeLayoutConstants.INVISIBLE_METHOD_ID;
+import static org.jikesrvm.ia32.StackframeLayoutConstants.STACKFRAME_SENTINEL_FP;
+
 import java.lang.annotation.Annotation;
 import java.lang.annotation.Inherited;
 
@@ -19,22 +22,31 @@ import org.jikesrvm.Callbacks;
 import org.jikesrvm.Constants;
 import org.jikesrvm.VM;
 import org.jikesrvm.compilers.common.CompiledMethod;
+import org.jikesrvm.compilers.common.CompiledMethods;
 import org.jikesrvm.compilers.opt.inlining.ClassLoadingDependencyManager;
-import org.jikesrvm.mm.mminterface.HandInlinedScanning;
 import org.jikesrvm.mm.mminterface.AlignmentEncoding;
+import org.jikesrvm.mm.mminterface.HandInlinedScanning;
 import org.jikesrvm.mm.mminterface.MemoryManager;
 import org.jikesrvm.objectmodel.FieldLayoutContext;
 import org.jikesrvm.objectmodel.IMT;
 import org.jikesrvm.objectmodel.ObjectModel;
 import org.jikesrvm.objectmodel.TIB;
+import org.jikesrvm.octet.Octet;
+import org.jikesrvm.octet.OctetState;
+import org.jikesrvm.octet.Stats;
 import org.jikesrvm.runtime.Magic;
 import org.jikesrvm.runtime.RuntimeEntrypoints;
 import org.jikesrvm.runtime.StackBrowser;
 import org.jikesrvm.runtime.Statics;
+import org.jikesrvm.velodrome.Velodrome;
 import org.vmmagic.pragma.NonMoving;
 import org.vmmagic.pragma.Pure;
 import org.vmmagic.pragma.Uninterruptible;
+import org.vmmagic.unboxed.Address;
 import org.vmmagic.unboxed.Offset;
+import org.vmmagic.unboxed.Word;
+
+// Octet: Static cloning: Modified various places in this class to support multiple resolved methods for every method reference.
 
 /**
  * Description of a java "class" type.<p>
@@ -86,7 +98,7 @@ public final class RVMClass extends RVMType implements Constants, ClassLoaderCon
   /** Fields of this class */
   private final RVMField[] declaredFields;
   /** Methods of this class */
-  private final RVMMethod[] declaredMethods;
+  private RVMMethod[] declaredMethods;
   /** Declared inner classes, may be null */
   private final TypeReference[] declaredClasses;
   /** The outer class, or null if this is not a inner/nested class */
@@ -418,6 +430,7 @@ public final class RVMClass extends RVMType implements Constants, ClassLoaderCon
    * Class that immediately encloses this class, or null if this is not an
    * inner/nested class.
    */
+  @Uninterruptible
   public TypeReference getEnclosingClass() {
     return enclosingClass;
   }
@@ -432,13 +445,13 @@ public final class RVMClass extends RVMType implements Constants, ClassLoaderCon
     }
     for(RVMMethod method: declaredMethods) {
       /* Make all declared methods appear resolved */
-      method.getMemberRef().asMethodReference().setResolvedMember(method);
+      method.getMemberRef().asMethodReference().setResolvedMember(method, true);
     }
     if (virtualMethods != null) {
       /* Possibly created Miranda methods */
       for(RVMMethod method: virtualMethods) {
         if (method.getDeclaringClass() == this) {
-          method.getMemberRef().asMethodReference().setResolvedMember(method);
+          method.getMemberRef().asMethodReference().setResolvedMember(method, true);
         }
       }
     }
@@ -520,18 +533,38 @@ public final class RVMClass extends RVMType implements Constants, ClassLoaderCon
     return null;
   }
 
+  boolean hasDeclaredMethodWithAnyContext(Atom methodName, Atom methodDescriptor) {
+    for (RVMMethod method : declaredMethods) {
+      if (method.getName() == methodName && method.getDescriptor() == methodDescriptor) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /**
    * Find description of a method of this class.
    * @param methodName method name - something like "foo"
    * @param methodDescriptor method descriptor - something like "()I"
    * @return description (null --> not found)
    */
-  public RVMMethod findDeclaredMethod(Atom methodName, Atom methodDescriptor) {
+  public RVMMethod findDeclaredMethod(Atom methodName, Atom methodDescriptor, int context) {
+    // Velodrome: Context: Library class (javax.*) can extend application classes (gnu.java.*), example hedc.
+    // See comment in Context for library prefixes.
+    // This hack is a workaround for just that issue. 
+    if (context == Context.VM_CONTEXT && Context.isApplicationPrefix(getTypeRef())) {
+      context = Context.TRANS_CONTEXT;
+    }
+    boolean foundSomething = false;
     for (RVMMethod method : declaredMethods) {
       if (method.getName() == methodName && method.getDescriptor() == methodDescriptor) {
-        return method;
+        foundSomething = true;
+        if (Context.isMatch(method, context, /* resolve = */ false)) { // Velodrome: Context: Added a parameter
+          return method;
+        }
       }
     }
+    if (VM.VerifyAssertions) { VM._assert(!foundSomething); }
     return null;
   }
 
@@ -557,7 +590,8 @@ public final class RVMClass extends RVMType implements Constants, ClassLoaderCon
   public RVMMethod findMainMethod() {
     Atom mainName = Atom.findOrCreateAsciiAtom(("main"));
     Atom mainDescriptor = Atom.findOrCreateAsciiAtom(("([Ljava/lang/String;)V"));
-    RVMMethod mainMethod = this.findDeclaredMethod(mainName, mainDescriptor);
+    // Velodrome: Context: main() should be non-atomic
+    RVMMethod mainMethod = this.findDeclaredMethod(mainName, mainDescriptor, Context.NONTRANS_CONTEXT);
 
     if (mainMethod == null || !mainMethod.isPublic() || !mainMethod.isStatic()) {
       // no such method
@@ -864,10 +898,11 @@ public final class RVMClass extends RVMType implements Constants, ClassLoaderCon
    * @return method description (null --> not found)
    */
   @Pure
-  public RVMMethod findStaticMethod(Atom memberName, Atom memberDescriptor) {
+  public RVMMethod findStaticMethod(Atom memberName, Atom memberDescriptor, int context) {
     if (VM.VerifyAssertions) VM._assert(isResolved());
     for (RVMMethod method : getStaticMethods()) {
-      if (method.getName() == memberName && method.getDescriptor() == memberDescriptor) {
+      if (method.getName() == memberName && method.getDescriptor() == memberDescriptor &&
+          Context.isMatch(method, context, false)) { // Velodrome: Context: Added a parameter
         return method;
       }
     }
@@ -880,10 +915,11 @@ public final class RVMClass extends RVMType implements Constants, ClassLoaderCon
    * @return method description (null --> not found)
    */
   @Pure
-  public RVMMethod findInitializerMethod(Atom memberDescriptor) {
+  public RVMMethod findInitializerMethod(Atom memberDescriptor, int context) {
     if (VM.VerifyAssertions) VM._assert(isResolved());
     for (RVMMethod method : getConstructorMethods()) {
-      if (method.getDescriptor() == memberDescriptor) {
+      if (method.getDescriptor() == memberDescriptor &&
+          Context.isMatch(method, context, false)) { // Velodrome: Context: Added a parameter
         return method;
       }
     }
@@ -1020,6 +1056,8 @@ public final class RVMClass extends RVMType implements Constants, ClassLoaderCon
     }
     if (VM.verboseClassLoading) VM.sysWrite("[Loaded " + toString() + "]\n");
   }
+  
+  // Velodrome: Context: Modified the resolve() method to support 2 static contexts and 3 resolved application contexts.
 
   /**
    * {@inheritDoc} Space in the JTOC is allocated for static fields,
@@ -1070,7 +1108,7 @@ public final class RVMClass extends RVMType implements Constants, ClassLoaderCon
     }
 
     if (VM.verboseClassLoading) VM.sysWrite("[Preparing " + this + "]\n");
-
+    
     // build field and method lists for this class
     //
     {
@@ -1101,7 +1139,69 @@ public final class RVMClass extends RVMType implements Constants, ClassLoaderCon
           instanceFields.addElement(field);
         }
       }
-
+      
+      // First find declared methods that should be cloned to have an extra context because of an overridden virtual method with two contexts.
+      MethodVector extraDeclaredMethods = new MethodVector();
+      for (int j = 0, m = virtualMethods.size(); j < m; j++) {
+        RVMMethod virtualMethod = virtualMethods.elementAt(j);
+        boolean hasContextMatch = false;
+        RVMMethod overridingMethod = null;
+        for (RVMMethod declaredMethod : declaredMethods) {
+          if (declaredMethod.getName() == virtualMethod.getName() &&
+              declaredMethod.getDescriptor() == virtualMethod.getDescriptor()) {
+            overridingMethod = declaredMethod;
+            if (virtualMethod.getResolvedContext() == declaredMethod.getResolvedContext()) {
+              hasContextMatch = true;
+            }
+          }
+        }
+        if (overridingMethod != null && !hasContextMatch) {
+          if (Context.isApplicationPrefix(this.getTypeRef())) { // Velodrome: Context: Clone only for application methods
+            //RVMMethod clonedMethod = overridingMethod.cloneMethod(Context.getOtherContext(overridingMethod, overridingMethod.getResolvedContext()));
+            RVMMethod clonedMethod = overridingMethod.cloneMethod(virtualMethod.getResolvedContext());
+            clonedMethod.getMemberRef().asMethodReference().setResolvedMember(clonedMethod, true);
+            extraDeclaredMethods.addElement(clonedMethod);
+          }
+        }
+      }
+      addDeclaredMethods(extraDeclaredMethods);      
+      extraDeclaredMethods = new MethodVector();
+      
+      // Now look for declared methods that should be cloned to have an extra context because of an overridden interface method.
+      if (!isInterface()) { // && isAbstract() -- removed this to fix an apparent bug
+        for (RVMClass I : declaredInterfaces) {
+          RVMMethod[] iMeths = I.getVirtualMethods();
+          for (RVMMethod iMeth : iMeths) {
+            RVMMethod partialMatch = null;
+            RVMMethod overridingMethod = null;
+            for (RVMMethod declaredMethod : declaredMethods) {
+              if (declaredMethod.getName() == iMeth.getName() && declaredMethod.getDescriptor() == iMeth.getDescriptor()) {
+                partialMatch = declaredMethod;
+                if (Context.isMatch(iMeth, declaredMethod.getResolvedContext(), true)) {
+                  overridingMethod = declaredMethod;
+                  // Velodrome: Context: Is this required?
+                  if (iMeth.getMemberRef().asMethodReference().isNonAtomic) {
+                    overridingMethod.getMemberRef().asMethodReference().isNonAtomic = true;
+                  } else if (overridingMethod.getMemberRef().asMethodReference().isNonAtomic) {
+                    iMeth.getMemberRef().asMethodReference().isNonAtomic = true;
+                  }
+                  break;
+                }
+              }
+            }
+            if (partialMatch != null && overridingMethod == null) {
+              if (Context.isApplicationPrefix(this.getTypeRef())) { // Velodrome: Context: Clone only for application methods
+                // RVMMethod newDeclaredMethod = partialMatch.cloneMethod(Context.getOtherContext(partialMatch, partialMatch.getResolvedContext()));
+                RVMMethod newDeclaredMethod = partialMatch.cloneMethod(iMeth.getResolvedContext());
+                newDeclaredMethod.getMemberRef().asMethodReference().setResolvedMember(newDeclaredMethod, true);
+                extraDeclaredMethods.addElement(newDeclaredMethod);
+              }
+            }
+          }
+        }
+      }
+      addDeclaredMethods(extraDeclaredMethods);
+      
       // append/overlay methods defined by this class
       //
       for (RVMMethod method : getDeclaredMethods()) {
@@ -1130,13 +1230,26 @@ public final class RVMClass extends RVMType implements Constants, ClassLoaderCon
           // method could override something in superclass - check for it
           //
           int superclassMethodIndex = -1;
+          boolean foundSomething = false;
           for (int j = 0, m = virtualMethods.size(); j < m; ++j) {
             RVMMethod alreadyDefinedMethod = virtualMethods.elementAt(j);
             if (alreadyDefinedMethod.getName() == method.getName() &&
                 alreadyDefinedMethod.getDescriptor() == method.getDescriptor()) {
-              // method already defined in superclass
-              superclassMethodIndex = j;
-              break;
+              foundSomething = true;
+              if (method.getResolvedContext() == alreadyDefinedMethod.getResolvedContext()) {
+                // method already defined in superclass
+                if (VM.VerifyAssertions) { VM._assert(superclassMethodIndex == -1); }
+                superclassMethodIndex = j;
+                // Velodrome: Context: Is this required?
+                if (alreadyDefinedMethod.getMemberRef().asMethodReference().isNonAtomic) {
+                  method.getMemberRef().asMethodReference().isNonAtomic = true;
+                } else if (method.getMemberRef().asMethodReference().isNonAtomic) {
+                  alreadyDefinedMethod.getMemberRef().asMethodReference().isNonAtomic = true;
+                }
+                // This is weird: To actually test the assertion above, we'll continue here instead of break.
+                if (VM.VerifyAssertions) { continue; }
+                break;
+              }
             }
           }
 
@@ -1167,11 +1280,24 @@ public final class RVMClass extends RVMType implements Constants, ClassLoaderCon
           for (RVMMethod iMeth : iMeths) {
             Atom iName = iMeth.getName();
             Atom iDesc = iMeth.getDescriptor();
+            RVMMethod overridingMethod = null;
             for (int k = 0; k < virtualMethods.size(); k++) {
               RVMMethod vMeth = virtualMethods.elementAt(k);
-              if (vMeth.getName() == iName && vMeth.getDescriptor() == iDesc) continue outer;
+              if (vMeth.getName() == iName && vMeth.getDescriptor() == iDesc) {
+                overridingMethod = vMeth;
+                if (Context.isMatch(iMeth, vMeth.getResolvedContext(), true)) continue outer;
+              }
             }
             MemberReference mRef = MemberReference.findOrCreate(typeRef, iName, iDesc);
+            if (overridingMethod != null) {
+              if (Context.isApplicationPrefix(this.getTypeRef())) { // Velodrome: Context: Clone only for application methods
+                //RVMMethod clonedMethod = overridingMethod.cloneMethod(Context.getOtherContext(overridingMethod, overridingMethod.getResolvedContext()));
+                RVMMethod clonedMethod = overridingMethod.cloneMethod(iMeth.getResolvedContext());
+                //clonedMethod.getMemberRef().asMethodReference().setResolvedMember(clonedMethod, true);
+                virtualMethods.addElement(clonedMethod);
+                continue;
+              }
+            }
             virtualMethods.addElement(new AbstractMethod(getTypeRef(),
                                                             mRef,
                                                             (short) (ACC_ABSTRACT | ACC_PUBLIC),
@@ -1179,7 +1305,8 @@ public final class RVMClass extends RVMType implements Constants, ClassLoaderCon
                                                             null,
                                                             null,
                                                             null,
-                                                            null));
+                                                            null,
+                                                            iMeth.getResolvedContext()));
           }
         }
       }
@@ -1212,6 +1339,48 @@ public final class RVMClass extends RVMType implements Constants, ClassLoaderCon
         field.setOffset(Statics.allocateNumericSlot(BYTES_IN_LONG, true));
       }
 
+      // Octet: Add per-field metadata for static, non-final fields.  Initialize metadata.
+      if (Octet.getConfig().addHeaderWord() &&
+          Octet.shouldAddMetadataForField(field.getMemberRef().asFieldReference()) &&
+          !field.isFinal()) {
+        Offset metadataOffset = Statics.allocateNumericSlot(BYTES_IN_WORD, true);
+        field.setMetadataOffset(metadataOffset);
+        if (Octet.getConfig().instrumentAllocation()) {
+          Word metadata =  OctetState.getInitial();
+          OctetState.check(metadata);
+          Statics.setSlotContents(metadataOffset, metadata);
+          if (VM.runningVM) {
+            Stats.Alloc.inc();
+          }
+        }
+      }
+      
+      // Velodrome: Add per-field metadata for static, non-final fields. Initialize metadata.
+      if (Velodrome.addPerFieldVelodromeMetadata() && !field.isFinal() 
+          && Velodrome.shouldAddVelodromeMetadataForStaticField(field.getMemberRef().asFieldReference())) {
+        // Velodrome: Metadata is always a reference to an object, will need to change this 
+        // if we are creating multiple words of metadata per field.
+        // We are treating metadata references as weak references, hence we are creating numeric slots to house those
+        // references so that GC does not trace them. They will be custom processed.
+        Offset writeSlot = Statics.allocateNumericSlot(BYTES_IN_ADDRESS, true);
+        // Verify if the offset can ever be an odd number, since RVMMember.NO_OFFSET is
+        // initialized to Short.MIN_VALUE
+        if (VM.VerifyAssertions && (writeSlot.toInt() % 2 != 0)) {
+          VM.sysWriteln("Value of write offset:", writeSlot.toInt());
+          VM._assert(NOT_REACHED);
+        }
+        field.setWriteMetadataOffset(writeSlot);
+        Statics.setSlotContents(writeSlot, Word.zero());
+        Offset readSlot = Statics.allocateNumericSlot(BYTES_IN_ADDRESS, true);
+        if (VM.VerifyAssertions && (readSlot.toInt() % 2 != 0)) {
+          VM.sysWriteln("Value of read offset:", readSlot.toInt());
+          VM._assert(NOT_REACHED);
+        }
+        field.setReadMetadataOffset(readSlot);
+        Statics.setSlotContents(readSlot, Word.zero());
+        Velodrome.addStaticOffsets(writeSlot, readSlot);
+      }
+
       // (SJF): Serialization nastily accesses even final private static
       //           fields via pseudo-reflection! So, we must shove the
       //           values of final static fields into the JTOC.  Now
@@ -1225,26 +1394,58 @@ public final class RVMClass extends RVMType implements Constants, ClassLoaderCon
     //
     ObjectModel.layoutInstanceFields(this);
 
+    // Velodrome: Initialize array of metadata references
+    
     // count reference fields
     int referenceFieldCount = 0;
+    int velodromeMetadataFieldCount = 0;
     for (RVMField field : instanceFields) {
       if (field.isTraced()) {
         referenceFieldCount += 1;
       }
+      
+      // Velodrome: count per-field metadata, even for untraced fields, this is required to 
+      // facilitate tracing by GC. The per-field metadata added are to be treated as references.
+      if (Velodrome.addPerFieldVelodromeMetadata()) {
+        if (Velodrome.shouldAddPerFieldVelodromeMetadata(field)) {
+          int numFields = Velodrome.getNumFields(field);
+          velodromeMetadataFieldCount += numFields;
+        }
+      }
+      
     }
 
     // record offsets of those instance fields that contain references
     //
     if (typeRef.isRuntimeTable()) {
       referenceOffsets = MemoryManager.newNonMovingIntArray(0);
+      if (Velodrome.addPerFieldVelodromeMetadata()) {
+        velodromeMetadataOffsets = MemoryManager.newNonMovingIntArray(0);
+      }
     } else {
       referenceOffsets = MemoryManager.newNonMovingIntArray(referenceFieldCount);
+      if (Velodrome.addPerFieldVelodromeMetadata()) {
+        velodromeMetadataOffsets = MemoryManager.newNonMovingIntArray(velodromeMetadataFieldCount);
+      }
+      
       int j = 0;
+      int index = 0;
       for (RVMField field : instanceFields) {
         if (field.isTraced()) {
           referenceOffsets[j++] = field.getOffset().toInt();
         }
+        
+        // Velodrome: count per-field metadata, even for untraced fields, this is required to 
+        // facilitate tracing by GC. The per-field metadata added are to be treated as references.
+        if (Velodrome.addPerFieldVelodromeMetadata()) {
+          if (Velodrome.shouldAddPerFieldVelodromeMetadata(field)) {
+            velodromeMetadataOffsets[index++] = field.getWriteMetadataOffset().toInt();
+            velodromeMetadataOffsets[index++] = field.getReadMetadataOffset().toInt();
+          }
+        }
+        
       }
+      if (VM.VerifyAssertions && Velodrome.addPerFieldVelodromeMetadata()) { VM._assert(velodromeMetadataOffsets.length % 2 == 0); }
     }
 
     // Allocate space for <init> method pointers
@@ -1317,14 +1518,65 @@ public final class RVMClass extends RVMType implements Constants, ClassLoaderCon
     if (!isInterface()) {
       final RVMMethod method =
           findVirtualMethod(RVMClassLoader.StandardObjectFinalizerMethodName,
-                            RVMClassLoader.StandardObjectFinalizerMethodDescriptor);
+                            RVMClassLoader.StandardObjectFinalizerMethodDescriptor,
+                            Context.FINALIZER_CONTEXT);
       if (!method.getDeclaringClass().isJavaLangObjectType()) {
         hasFinalizer = true;
       }
     }
 
     if (VM.TraceClassLoading && VM.runningVM) VM.sysWriteln("RVMClass: (end)   resolve " + this);
+    
+    // Velodrome: Context: Verify that non-application methods should have only one VM_CONTEXT
+    if (VM.VerifyAssertions && !Context.isApplicationPrefix(getTypeRef())) {
+      testContextOfNonApplicationMethods();
+    }
+    
   }
+
+  private void addDeclaredMethods(MethodVector extraDeclaredMethods) {
+    RVMMethod[] newDeclaredMethods = new RVMMethod[declaredMethods.length + extraDeclaredMethods.size()];
+    int i;
+    for (i = 0; i < declaredMethods.length; i++) {
+      newDeclaredMethods[i] = declaredMethods[i];
+    }
+    for (int j = 0; j < extraDeclaredMethods.size(); j++, i++) {
+      newDeclaredMethods[i] = extraDeclaredMethods.elementAt(j);
+    }
+    declaredMethods = newDeclaredMethods;
+  }
+  
+  private void printMethods() {
+    VM.sysWriteln("Class name:", this.getDescriptor());
+    VM.sysWriteln("Start printVirtualMethods");
+    for (RVMMethod m : virtualMethods) {
+      VM.sysWrite(Velodrome.constructMethodSignature(m));
+      VM.sysWrite(" Static context:", m.getStaticContext());
+      VM.sysWriteln(" Resolved context:", m.getResolvedContext());
+    }
+    VM.sysWriteln("End printVirtualMethods");
+    VM.sysWriteln("Start printDeclaredMethods");
+    for (RVMMethod m : declaredMethods) {
+      VM.sysWrite(Velodrome.constructMethodSignature(m));
+      VM.sysWrite(" Static context:", m.getStaticContext());
+      VM.sysWriteln(" Resolved context:", m.getResolvedContext());
+    }
+    VM.sysWriteln("End printDeclaredMethods");
+  }
+  
+  // Velodrome: Context: Verify that non-application methods should have only one VM_CONTEXT
+  private void testContextOfNonApplicationMethods() {
+    // The following assertions don't work since we are currently considering org.xml.* packages as application.
+//    for (RVMMethod m : virtualMethods) {
+//      if (VM.VerifyAssertions) { VM._assert(m.getStaticContext() == Context.VM_CONTEXT); }
+//      if (VM.VerifyAssertions) { VM._assert(m.getResolvedContext() == Context.VM_CONTEXT); }
+//    }
+    for (RVMMethod m : declaredMethods) {
+      if (VM.VerifyAssertions) { VM._assert(m.getStaticContext() == Context.VM_CONTEXT); }
+      if (VM.VerifyAssertions) { VM._assert(m.getResolvedContext() == Context.VM_CONTEXT); }
+    }
+  }
+  
 
   /**
    * Atomically initialize the important parts of the TIB and let the world know this type is
@@ -1530,6 +1782,36 @@ public final class RVMClass extends RVMType implements Constants, ClassLoaderCon
     // run <clinit>
     //
     if (classInitializerMethod != null) {
+      
+      // Velodrome: Context: Need to invoke the correct version of class initializer irrespective of where <clinit> gets
+      // called from. We do this by walking the stack and finding the static context of the first application method.
+      if (Context.isApplicationPrefix(this.getTypeRef())) {
+        Address fp = Magic.getFramePointer();
+        int context = Context.NONTRANS_CONTEXT;
+        fp = Magic.getCallerFramePointer(fp);
+        // Search for the topmost application frame/method
+        while (Magic.getCallerFramePointer(fp).NE(STACKFRAME_SENTINEL_FP)) {
+          int compiledMethodId = Magic.getCompiledMethodID(fp);
+          if (compiledMethodId != INVISIBLE_METHOD_ID) {
+            CompiledMethod compiledMethod = CompiledMethods.getCompiledMethod(compiledMethodId);
+            RVMMethod method = compiledMethod.getMethod();
+            if (!method.isNative() && Octet.shouldInstrumentMethod(method)) {
+              context = method.getStaticContext();
+              break;
+            }
+          }
+          fp = Magic.getCallerFramePointer(fp);
+        }
+        for (RVMMethod method : declaredMethods) { // Search for desired <clinit>
+          if (method.getName() == RVMClassLoader.StandardClassInitializerMethodName) {
+            if (method.getResolvedContext() == context) {
+              classInitializerMethod = method;
+              break;
+            }
+          }
+        }
+      }
+      
       CompiledMethod cm = classInitializerMethod.getCurrentCompiledMethod();
       while (cm == null) {
         classInitializerMethod.compile();
@@ -1699,7 +1981,7 @@ public final class RVMClass extends RVMType implements Constants, ClassLoaderCon
    */
   public void updateTIBEntry(RVMMethod m) {
     if (VM.VerifyAssertions) {
-      RVMMethod vm = findVirtualMethod(m.getName(), m.getDescriptor());
+      RVMMethod vm = findVirtualMethod(m.getName(), m.getDescriptor(), m.getResolvedContext());
       VM._assert(vm == m);
     }
     typeInformationBlock.setVirtualMethod(m.getOffset(), m.getCurrentEntryCodeArray());
@@ -1714,7 +1996,7 @@ public final class RVMClass extends RVMType implements Constants, ClassLoaderCon
    *       the most recent instructions for the method.
    */
   public void updateVirtualMethod(RVMMethod m) {
-    RVMMethod dm = findDeclaredMethod(m.getName(), m.getDescriptor());
+    RVMMethod dm = findDeclaredMethod(m.getName(), m.getDescriptor(), m.getResolvedContext());
     if (dm != null && dm != m) return;  // this method got overridden
     updateTIBEntry(m);
     if (m.isPrivate()) return; // can't override

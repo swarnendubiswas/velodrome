@@ -73,7 +73,9 @@ public final class VMStackWalker {
     b.up(); // skip VMStackWalker.getClassContext (this call)
 
     boolean reflected;  // Were we invoked by reflection?
-    if (b.getMethod() == Entrypoints.java_lang_reflect_Method_invokeMethod){
+    // Octet: Static cloning: Match on the method reference here for simplicity
+    if (b.getMethod().getMemberRef() == Entrypoints.java_lang_reflect_Method_invokeMethodReference){
+    //if (b.getMethod() == Entrypoints.java_lang_reflect_Method_invokeMethod){
       reflected = true;
       b.up();         // Skip Method.invoke, (if we were called by reflection)
     } else {
@@ -142,7 +144,9 @@ public final class VMStackWalker {
       b.up();
 
     /* Skip Method.invoke, (if the caller was called by reflection) */
-    if (b.getMethod() == Entrypoints.java_lang_reflect_Method_invokeMethod){
+    // Octet: Static cloning: Match on the method reference here for simplicity
+    if (b.getMethod().getMemberRef() == Entrypoints.java_lang_reflect_Method_invokeMethodReference){
+    //if (b.getMethod() == Entrypoints.java_lang_reflect_Method_invokeMethod){
       b.up();
     }
     /* skip past another frame, whatever getClassContext()[0] would be. */

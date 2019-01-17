@@ -1251,6 +1251,31 @@ public class Barriers implements org.mmtk.utility.Constants {
       VM._assert(VM.NOT_REACHED);
   }
 
+  // Octet: TODO: any places that directly call the above methods directly might need Octet instrumentation; need to check them
+  
+  // Octet: "pre-barriers" that act as generational write barriers without actually performing the write itself
+  
+  @Inline
+  @Entrypoint
+  public static void objectFieldWritePreBarrier(Object ref, Object value, Offset offset, int locationMetadata) {
+    if (NEEDS_OBJECT_GC_WRITE_BARRIER) {
+      ObjectReference src = ObjectReference.fromObject(ref);
+      Selected.Mutator.get().objectReferencePreWrite(src, src.toAddress().plus(offset), ObjectReference.fromObject(value), offset.toWord(), Word.fromIntZeroExtend(locationMetadata), INSTANCE_FIELD);
+    } else if (VM.VerifyAssertions)
+      VM._assert(false);
+  }
+
+  @Inline
+  @Entrypoint
+  public static void objectArrayWritePreBarrier(Object[] ref, int index, Object value) {
+    if (NEEDS_OBJECT_GC_WRITE_BARRIER) {
+      ObjectReference array = ObjectReference.fromObject(ref);
+      Offset offset = Offset.fromIntZeroExtend(index << MemoryManagerConstants.LOG_BYTES_IN_ADDRESS);
+      Selected.Mutator.get().objectReferencePreWrite(array, array.toAddress().plus(offset), ObjectReference.fromObject(value), offset.toWord(), Word.zero(), ARRAY_ELEMENT);
+    } else if (VM.VerifyAssertions)
+      VM._assert(false);
+  }
+  
   /**
    * Barrier for loads of objects from fields of instances (i.e. getfield).
    *

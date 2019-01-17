@@ -388,6 +388,14 @@ class SimpleEscape extends CompilerPhase {
    */
   private static boolean checkEscapesThread(RegisterOperand use, IR ir, Set<Register> visited) {
     Instruction inst = use.instruction;
+    
+    // Octet: TODO: This check seems necessary (but it's still not enough to make escape analysis correct)
+    /*
+    if (ir.isParameter(use)) {
+      return true;
+    }
+    */
+
     switch (inst.getOpcode()) {
       case INT_ASTORE_opcode:
       case LONG_ASTORE_opcode:
@@ -510,8 +518,15 @@ class SimpleEscape extends CompilerPhase {
           return summ.resultMayEscapeThread();
         }
         // use is a parameter to the call.  Find out which one.
+
+        // Octet: Had previously added check for -1 because some call uses aren't actually parameters in low-level IR.
+        // But now we should go back to the original Jikes code, I think.
         int p = getParameterIndex(use, inst);
-        return summ.parameterMayEscapeThread(p);
+        if (p >= 0) {
+          return summ.parameterMayEscapeThread(p);
+        } else {
+          VM.sysFail("Unexpected");
+        }
       case REF_MOVE_opcode: {
         Register copy = Move.getResult(inst).getRegister();
         if (!copy.isSSA()) {
@@ -818,7 +833,10 @@ class SimpleEscape extends CompilerPhase {
     try {
       OptimizingCompiler.compile(plan);
     } catch (MagicNotImplementedException e) {
-      summ.setInProgress(false); // summary stays at bottom
+      // Octet: added null check to avoid exception
+      if (summ != null) {
+        summ.setInProgress(false); // summary stays at bottom
+      }
     }
   }
 

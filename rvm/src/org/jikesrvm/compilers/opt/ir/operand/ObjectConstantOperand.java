@@ -15,9 +15,12 @@ package org.jikesrvm.compilers.opt.ir.operand;
 import org.jikesrvm.VM;
 import org.jikesrvm.classloader.Atom;
 import org.jikesrvm.classloader.BootstrapClassLoader;
+import org.jikesrvm.classloader.Context;
 import org.jikesrvm.classloader.TypeReference;
 import org.vmmagic.unboxed.Offset;
 import org.jikesrvm.mm.mminterface.MemoryManager;
+import org.jikesrvm.objectmodel.ObjectModel;
+import org.jikesrvm.runtime.Magic;
 
 /**
  * Represents a constant object operand (for example, from an
@@ -97,6 +100,13 @@ public class ObjectConstantOperand extends ConstantOperand {
 
   @Override
   public boolean similar(Operand op) {
+    // Octet: Avoid calling equals() on an application object, since that can trigger an Octet barrier from the compiler thread.
+    // Instead, mimic Object.equals().
+    if (VM.runningVM) {
+      if (Context.isApplicationPrefix(ObjectModel.getObjectType(value).getTypeRef())) {
+        return (op instanceof ObjectConstantOperand) &&  (value == ((ObjectConstantOperand) op).value);   
+      }
+    }
     return (op instanceof ObjectConstantOperand) && value.equals(((ObjectConstantOperand) op).value);
   }
 
@@ -107,6 +117,13 @@ public class ObjectConstantOperand extends ConstantOperand {
    */
   @Override
   public String toString() {
+    // Octet: Avoid calling toString() on an application object, since that can trigger an Octet barrier from the compiler thread.
+    // Instead, mimic Object.toString().
+    if (VM.runningVM) {
+      if (Context.isApplicationPrefix(ObjectModel.getObjectType(value).getTypeRef())) {
+        return "object \"" + value.getClass().getName() + "@" + Integer.toHexString(ObjectModel.getObjectHashCode(value)) + "\"";
+      }
+    }
     return "object \"" + value + "\"";
   }
 }

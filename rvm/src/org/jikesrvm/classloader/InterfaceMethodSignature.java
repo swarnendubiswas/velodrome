@@ -18,6 +18,8 @@ import org.jikesrvm.objectmodel.TIBLayoutConstants;
 import org.jikesrvm.util.ImmutableEntryHashSetRVM;
 import org.vmmagic.unboxed.Offset;
 
+// Octet: Static cloning: Add context as part of an interface method signature.
+
 /**
  *  An interface method signature is a pair of atoms:
  *  interfaceMethodName + interfaceMethodDescriptor.
@@ -50,10 +52,13 @@ public final class InterfaceMethodSignature implements TIBLayoutConstants, SizeC
    */
   private final int id;
 
-  private InterfaceMethodSignature(Atom name, Atom descriptor, int id) {
+  private final int context;
+  
+  private InterfaceMethodSignature(Atom name, Atom descriptor, int context, int id) {
     this.name = name;
     this.descriptor = descriptor;
     this.id = id;
+    this.context = context;
   }
 
   /**
@@ -62,8 +67,8 @@ public final class InterfaceMethodSignature implements TIBLayoutConstants, SizeC
    * @param ref     A reference to a supposed interface method
    * @return the interface method signature
    */
-  public static synchronized InterfaceMethodSignature findOrCreate(MemberReference ref) {
-    InterfaceMethodSignature key = new InterfaceMethodSignature(ref.getName(), ref.getDescriptor(), nextId+1);
+  public static synchronized InterfaceMethodSignature findOrCreate(MemberReference ref, int resolvedContext) {
+    InterfaceMethodSignature key = new InterfaceMethodSignature(ref.getName(), ref.getDescriptor(), resolvedContext, nextId+1);
     InterfaceMethodSignature val = dictionary.get(key);
     if (val != null) return val;
     nextId++;
@@ -97,14 +102,14 @@ public final class InterfaceMethodSignature implements TIBLayoutConstants, SizeC
 
   @Override
   public int hashCode() {
-    return name.hashCode() + descriptor.hashCode();
+    return name.hashCode() + descriptor.hashCode() + context;
   }
 
   @Override
   public boolean equals(Object other) {
     if (other instanceof InterfaceMethodSignature) {
       InterfaceMethodSignature that = (InterfaceMethodSignature) other;
-      return name == that.name && descriptor == that.descriptor;
+      return name == that.name && descriptor == that.descriptor && context == that.context;
     } else {
       return false;
     }

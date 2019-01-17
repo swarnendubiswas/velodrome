@@ -12,13 +12,14 @@
  */
 package org.mmtk.plan;
 
+import org.mmtk.plan.generational.Gen;
 import org.mmtk.utility.Log;
 import org.mmtk.utility.options.Options;
 import org.mmtk.utility.sanitychecker.SanityCheckerLocal;
-
 import org.mmtk.vm.VM;
-
-import org.vmmagic.pragma.*;
+import org.vmmagic.pragma.Inline;
+import org.vmmagic.pragma.Uninterruptible;
+import org.vmmagic.unboxed.Address;
 
 /**
  * This class (and its sub-classes) implement <i>per-collector thread</i>
@@ -136,6 +137,29 @@ public abstract class SimpleCollector extends ParallelCollector {
 
     if (phaseId == Simple.RELEASE) {
       // Nothing to do
+      return;
+    }
+    
+    // Velodrome: Added a phase for processing metadata references
+    if (phaseId == Gen.VELODROME_METADATA) {
+      TraceLocal trace = ((ParallelCollector) VM.activePlan.collector()).getCurrentTrace();
+      if (!global().isCurrentGCNursery()) {
+        while (!trace.metadataSlots.isEmpty()) {
+          Address mdSlot = trace.metadataSlots.pop();
+          VM.objectModel.traceMetadataReferencesDuringFullHeap(trace, mdSlot);
+        }
+      } else {
+        while (!trace.metadataSlots.isEmpty()) {
+          Address mdSlot = trace.metadataSlots.pop();
+          VM.objectModel.updateMetadataSlotsDuringNursery(trace, mdSlot);
+        }
+      } 
+      VM.objectModel.traceStaticMetadataSlots(); // Scan statics
+      
+      // Velodrome: LATER: Is this required? Mike says that only the mutator generates remset entries.
+      // Flush out any remset entries generated during the above activities
+      VM.objectModel.flushRememberedSets();
+      if (VM.VERIFY_ASSERTIONS) { VM.assertions._assert(trace.metadataSlots.isFlushed()); }
       return;
     }
 

@@ -679,6 +679,12 @@ hardwareTrapHandler(int signo, siginfo_t *si, void *context)
             fprintf(SysTraceFile,
                      "%s: internal error: recursive use of"
                     " hardware exception registers (exiting)\n", Me);
+
+         /* Octet: print an alternative debugging strategy */
+         fprintf(SysTraceFile,
+                 "If this error report doesn't help you, try disabling "
+                 "this block (search Jikes for \"Test for recursive errors\").\n", Me);
+
         /*
          * Things went badly wrong, so attempt to generate a useful error dump
          * before exiting by returning to Scheduler.dumpStackAndDie passing
@@ -832,7 +838,8 @@ softwareSignalHandler(int signo,
                       void *context)
 {
     // asynchronous signal used to awaken internal debugger
-    if (signo == SIGQUIT) {
+    // Octet: make it possible to debug when running from EXP (by sending SIGABRT)
+    if (signo == SIGQUIT || signo == SIGABRT) {
         // Turn on debug-request flag.
         // Note that "jtoc" is not necessarily valid, because we might have interrupted
         // C-library code, so we use boot image jtoc address (== VmToc) instead.
@@ -1051,6 +1058,8 @@ createVM(void)
     bootRecord->bootImageRMapStart   = (Address) bootRMapRegion;
     bootRecord->bootImageRMapEnd     = (Address) bootRMapRegion + roundedRMapRegionSize;
     bootRecord->verboseBoot      = verboseBoot;
+    // Velodrome: Adding a non-standard argument to identify benchmark category
+    bootRecord->benchmarkCategory = benchmarkCategory;
 
     /* write sys.C linkage information into boot record */
 
@@ -1147,6 +1156,12 @@ createVM(void)
         return 1;
     }
     if (sigaction (SIGQUIT, &action, 0)) { /* catch QUIT to invoke debugger
+                                            * thread */
+        fprintf(SysErrorFile, "%s: sigaction failed (errno=%d)\n", Me, errno);
+        return 1;
+    }
+    // Octet: help debugging by enabling sending SIGABRT to JikesRVM when running inside EXP, and getting a stack dump
+    if (sigaction (SIGABRT, &action, 0)) { /* catch ABRT to invoke debugger
                                             * thread */
         fprintf(SysErrorFile, "%s: sigaction failed (errno=%d)\n", Me, errno);
         return 1;

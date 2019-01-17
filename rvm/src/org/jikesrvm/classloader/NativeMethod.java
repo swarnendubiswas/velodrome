@@ -41,6 +41,8 @@ public final class NativeMethod extends RVMMethod {
    */
   private Address nativeTOC;
 
+  // Octet: Static cloning: Support multiple resolved methods for every method reference.
+
   /**
    * Construct native method information
    *
@@ -56,7 +58,7 @@ public final class NativeMethod extends RVMMethod {
    */
   NativeMethod(TypeReference declaringClass, MemberReference memRef, short modifiers,
                   TypeReference[] exceptionTypes, Atom signature, RVMAnnotation[] annotations,
-                  RVMAnnotation[][] parameterAnnotations, Object annotationDefault) {
+                  RVMAnnotation[][] parameterAnnotations, Object annotationDefault, int resolvedContext) {
     super(declaringClass,
           memRef,
           modifiers,
@@ -64,7 +66,16 @@ public final class NativeMethod extends RVMMethod {
           signature,
           annotations,
           parameterAnnotations,
-          annotationDefault);
+          annotationDefault,
+          resolvedContext);
+  }
+  
+  NativeMethod(NativeMethod method, int resolvedContext) {
+    super(method, resolvedContext);
+  }
+
+  RVMMethod cloneMethod(int resolvedContext) {
+    return new NativeMethod(this, resolvedContext);
   }
 
   @Override

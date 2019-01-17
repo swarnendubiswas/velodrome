@@ -42,6 +42,7 @@ import static org.jikesrvm.mm.mminterface.Barriers.*;
 import java.lang.reflect.Constructor;
 
 import org.jikesrvm.VM;
+import org.jikesrvm.classloader.Context;
 import org.jikesrvm.classloader.RVMArray;
 import org.jikesrvm.classloader.RVMClass;
 import org.jikesrvm.classloader.RVMField;
@@ -79,7 +80,10 @@ import org.jikesrvm.compilers.opt.ir.operand.RegisterOperand;
 import org.jikesrvm.compilers.opt.ir.operand.TypeOperand;
 import org.jikesrvm.mm.mminterface.MemoryManager;
 import org.jikesrvm.objectmodel.ObjectModel;
+import org.jikesrvm.octet.Octet;
 import org.jikesrvm.runtime.Entrypoints;
+import org.jikesrvm.util.HashSetRVM;
+import org.vmmagic.pragma.Inline;
 
 /**
  * As part of the expansion of HIR into LIR, this compile phase
@@ -143,6 +147,16 @@ public final class ExpandRuntimeServices extends CompilerPhase {
   public void perform(IR ir) {
     ir.gc.resync(); // resync generation context -- yuck...
 
+    // Octet: Static cloning: Check that the static and dynamic contexts match.
+    if (Context.DEBUG && Context.isLibraryPrefix(ir.getMethod().getDeclaringClass().getTypeRef())) {
+      RVMMethod target = Entrypoints.checkLibraryContextMethod;
+      Instruction call = Call.create0(CALL, null, IRTools.AC(target.getOffset()), MethodOperand.STATIC(target));
+      ir.firstBasicBlockInCodeOrder().prependInstructionRespectingPrologue(call);
+    }
+    
+    // Octet: needed in order to ensure that Jikes write pre-barriers aren't added multiple times to the same instruction
+    HashSetRVM<Instruction> instsWithWritePreBarrier = new HashSetRVM<Instruction>();
+    
     Instruction next;
     for (Instruction inst = ir.firstInstructionInCodeOrder(); inst != null; inst = next) {
       next = inst.nextInstructionInCodeOrder();
@@ -322,7 +336,13 @@ public final class ExpandRuntimeServices extends CompilerPhase {
           Operand ref = MonitorOp.getClearRef(inst);
           RVMType refType = ref.getType().peekType();
           if (refType != null && !refType.getThinLockOffset().isMax()) {
-            RVMMethod target = Entrypoints.inlineLockMethod;
+            // Velodrome: Decide which lock method to use
+            RVMMethod target;
+            if (Octet.shouldInstrumentMethod(inst.position.getMethod())) {
+              target = Entrypoints.inlineLockMethodWithInstrumentation;
+            } else {
+              target = Entrypoints.inlineLockMethodWithoutInstrumentation;
+            }
             Call.mutate2(inst,
                          CALL,
                          null,
@@ -338,7 +358,13 @@ public final class ExpandRuntimeServices extends CompilerPhase {
               inline(inst, ir);
             }
           } else {
-            RVMMethod target = Entrypoints.lockMethod;
+            // Velodrome: Decide which lock method to use
+            RVMMethod target;
+            if (Octet.shouldInstrumentMethod(inst.position.getMethod())) {
+              target = Entrypoints.lockMethodWithInstrumentation;
+            } else {
+              target = Entrypoints.lockMethodWithoutInstrumentation;
+            }
             Call.mutate1(inst,
                          CALL,
                          null,
@@ -354,7 +380,13 @@ public final class ExpandRuntimeServices extends CompilerPhase {
           Operand ref = MonitorOp.getClearRef(inst);
           RVMType refType = ref.getType().peekType();
           if (refType != null && !refType.getThinLockOffset().isMax()) {
-            RVMMethod target = Entrypoints.inlineUnlockMethod;
+            // Velodrome: Decide which lock method to use
+            RVMMethod target;
+            if (Octet.shouldInstrumentMethod(inst.position.getMethod())) {
+              target = Entrypoints.inlineUnlockMethodWithInstrumentation;
+            } else {
+              target = Entrypoints.inlineUnlockMethodWithoutInstrumentation;
+            }
             Call.mutate2(inst,
                          CALL,
                          null,
@@ -370,7 +402,13 @@ public final class ExpandRuntimeServices extends CompilerPhase {
               inline(inst, ir);
             }
           } else {
-            RVMMethod target = Entrypoints.unlockMethod;
+            // Velodrome: Decide which unlock method to use
+            RVMMethod target;
+            if (Octet.shouldInstrumentMethod(inst.position.getMethod())) {
+              target = Entrypoints.unlockMethodWithInstrumentation;
+            } else {
+              target = Entrypoints.unlockMethodWithoutInstrumentation;
+            }
             Call.mutate1(inst,
                          CALL,
                          null,
@@ -385,6 +423,17 @@ public final class ExpandRuntimeServices extends CompilerPhase {
         case REF_ASTORE_opcode: {
           if (NEEDS_OBJECT_ASTORE_BARRIER) {
             RVMMethod target = Entrypoints.objectArrayWriteBarrierMethod;
+            
+            // Octet: If the instruction might need an Octet barrier, let's leave the instruction alone and instead insert a "pre-barrier"
+            boolean usePreBarrier = mightNeedOctetBarrier(inst);
+            if (usePreBarrier) {
+              // Don't add Jikes write barriers twice
+              if (instsWithWritePreBarrier.contains(inst)) {
+                break;
+              }
+              target = Entrypoints.objectArrayWritePreBarrierMethod;
+            }
+            
             Instruction wb =
                 Call.create3(CALL,
                              null,
@@ -396,7 +445,15 @@ public final class ExpandRuntimeServices extends CompilerPhase {
                              AStore.getValue(inst).copy());
             wb.bcIndex = RUNTIME_SERVICES_BCI;
             wb.position = inst.position;
-            inst.replace(wb);
+            
+            // Octet: If inserting a pre-barrier, then don't replace the instruction
+            if (usePreBarrier) {
+              inst.insertBefore(wb);
+              instsWithWritePreBarrier.add(inst);
+            } else {
+              inst.replace(wb);
+            }
+
             next = wb.prevInstructionInCodeOrder();
             if (ir.options.H2L_INLINE_WRITE_BARRIER) {
               inline(wb, ir, true);
@@ -453,6 +510,9 @@ public final class ExpandRuntimeServices extends CompilerPhase {
 
         case REF_ALOAD_opcode: {
           if (NEEDS_OBJECT_ALOAD_BARRIER) {
+            // Octet: we can't support barriers that aren't heap reference write barriers
+            if (VM.VerifyAssertions) { VM._assert(false); }
+            
             RVMMethod target = Entrypoints.objectArrayReadBarrierMethod;
             Instruction rb =
               Call.create2(CALL,
@@ -480,6 +540,17 @@ public final class ExpandRuntimeServices extends CompilerPhase {
               RVMField field = fieldRef.peekResolvedField();
               if (field == null || !field.isUntraced()) {
                 RVMMethod target = Entrypoints.objectFieldWriteBarrierMethod;
+                
+                // Octet: If the instruction might need an Octet barrier, let's leave the instruction alone and instead insert a "pre-barrier"
+                boolean usePreBarrier = mightNeedOctetBarrier(inst);
+                if (usePreBarrier) {
+                  // Don't add Jikes write barriers twice
+                  if (instsWithWritePreBarrier.contains(inst)) {
+                    break;
+                  }
+                  target = Entrypoints.objectFieldWritePreBarrierMethod;
+                }
+                
                 Instruction wb =
                     Call.create4(CALL,
                                  null,
@@ -492,7 +563,15 @@ public final class ExpandRuntimeServices extends CompilerPhase {
                                  IRTools.IC(fieldRef.getId()));
                 wb.bcIndex = RUNTIME_SERVICES_BCI;
                 wb.position = inst.position;
-                inst.replace(wb);
+                
+                // Octet: If inserting a pre-barrier, then don't replace the instruction
+                if (usePreBarrier) {
+                  inst.insertBefore(wb);
+                  instsWithWritePreBarrier.add(inst);
+                } else {
+                  inst.replace(wb);
+                }
+                
                 next = wb.prevInstructionInCodeOrder();
                 if (ir.options.H2L_INLINE_WRITE_BARRIER) {
                   inline(wb, ir, true);
@@ -532,6 +611,9 @@ public final class ExpandRuntimeServices extends CompilerPhase {
 
         case GETFIELD_opcode: {
           if (NEEDS_OBJECT_GETFIELD_BARRIER) {
+            // Octet: we can't support barriers that aren't heap reference write barriers
+            if (VM.VerifyAssertions) { VM._assert(false); }
+            
             LocationOperand loc = GetField.getLocation(inst);
             FieldReference fieldRef = loc.getFieldRef();
             if (GetField.getResult(inst).getType().isReferenceType()) {
@@ -560,6 +642,9 @@ public final class ExpandRuntimeServices extends CompilerPhase {
 
         case PUTSTATIC_opcode: {
           if (NEEDS_OBJECT_PUTSTATIC_BARRIER) {
+            // Octet: we can't support barriers that aren't heap reference write barriers
+            if (VM.VerifyAssertions) { VM._assert(false); }
+            
             LocationOperand loc = PutStatic.getLocation(inst);
             FieldReference field = loc.getFieldRef();
             if (!field.getFieldContentsType().isPrimitiveType()) {
@@ -585,7 +670,27 @@ public final class ExpandRuntimeServices extends CompilerPhase {
         break;
 
         case GETSTATIC_opcode: {
+          // Octet: Change System.out/err/in to VMSystem.out/err/in if in the VM context.
+          if (inst.position.getMethod().getStaticContext() == Context.VM_CONTEXT) { 
+            FieldReference oldFieldRef = GetStatic.getLocation(inst).getFieldRef();
+            FieldReference newFieldRef = oldFieldRef; 
+            if (oldFieldRef == Entrypoints.systemOut) {
+              newFieldRef = Entrypoints.vmSystemOut;
+            } else if (oldFieldRef == Entrypoints.systemErr) {
+              newFieldRef = Entrypoints.vmSystemErr;
+            } else if (oldFieldRef == Entrypoints.systemIn) { 
+              newFieldRef = Entrypoints.vmSystemIn;
+            }
+            if (newFieldRef != oldFieldRef) {
+              GetStatic.setLocation(inst, new LocationOperand(newFieldRef));
+              GetStatic.setOffset(inst, IRTools.AC(newFieldRef.peekResolvedField().getOffset()));
+            }
+          }
+          
           if (NEEDS_OBJECT_GETSTATIC_BARRIER) {
+            // Octet: we can't support barriers that aren't heap reference write barriers
+            if (VM.VerifyAssertions) { VM._assert(false); }
+            
             LocationOperand loc = GetStatic.getLocation(inst);
             FieldReference field = loc.getFieldRef();
             if (!field.getFieldContentsType().isPrimitiveType()) {
@@ -625,6 +730,19 @@ public final class ExpandRuntimeServices extends CompilerPhase {
     }
     // signal that we do not intend to use the gc in other phases anymore.
     ir.gc.close();
+  }
+
+  /** Octet: Check whether an instruction needs to be instrumented by Octet. */
+  @Inline
+  boolean mightNeedOctetBarrier(Instruction inst) {
+    if (Octet.getConfig().insertBarriers() &&
+        Octet.getConfig().instrumentOptimizingCompiler()) {
+      if (inst.isPossibleSharedMemoryAccess()) {
+        if (VM.VerifyAssertions) { VM._assert(Octet.getClientAnalysis().useLateOptInstrumentation()); } 
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -668,6 +786,9 @@ public final class ExpandRuntimeServices extends CompilerPhase {
    * @param ir the IR
    */
   private void primitiveArrayStoreHelper(RVMMethod target, Instruction inst, Instruction next, IR ir) {
+    // Octet: we can't support barriers that aren't heap reference write barriers
+    if (VM.VerifyAssertions) { VM._assert(false); }
+    
     Instruction wb =
       Call.create3(CALL,
                    null,
@@ -694,6 +815,9 @@ public final class ExpandRuntimeServices extends CompilerPhase {
    * @param ir the IR
    */
   private void primitiveObjectFieldStoreHelper(RVMMethod target, Instruction inst, Instruction next, IR ir, FieldReference fieldRef) {
+    // Octet: we can't support barriers that aren't heap reference write barriers
+    if (VM.VerifyAssertions) { VM._assert(false); }
+    
     Instruction wb =
       Call.create4(CALL,
                    null,

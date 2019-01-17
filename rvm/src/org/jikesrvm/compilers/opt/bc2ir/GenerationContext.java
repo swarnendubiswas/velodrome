@@ -58,6 +58,7 @@ import org.jikesrvm.compilers.opt.ir.operand.Operand;
 import org.jikesrvm.compilers.opt.ir.operand.RegisterOperand;
 import org.jikesrvm.compilers.opt.ir.operand.TrueGuardOperand;
 import org.jikesrvm.compilers.opt.ir.operand.TypeOperand;
+import org.jikesrvm.octet.Octet;
 import org.jikesrvm.runtime.Entrypoints;
 import org.jikesrvm.runtime.Statics;
 import org.vmmagic.unboxed.Offset;
@@ -728,7 +729,14 @@ public final class GenerationContext implements org.jikesrvm.compilers.opt.drive
       appendInstruction(rethrow, s, SYNTH_CATCH_BCI);
       Operand lockObject = getLockObject();
 
-      RVMMethod target = Entrypoints.unlockAndThrowMethod;
+      // Velodrome: Decide which unlock method to use
+      RVMMethod target;
+      if (Octet.shouldInstrumentMethod(method)) {
+        target = Entrypoints.unlockAndThrowMethod;
+      } else {
+        target = Entrypoints.unlockAndThrowMethodWithoutInstrumentation;
+      }
+      
       MethodOperand methodOp = MethodOperand.STATIC(target);
       methodOp.setIsNonReturningCall(true); // Used to keep cfg correct
       s =

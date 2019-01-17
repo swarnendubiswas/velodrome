@@ -23,6 +23,7 @@ import java.lang.reflect.Method;
 
 import org.jikesrvm.VM;
 import org.jikesrvm.ArchitectureSpecific.CodeArray;
+import org.jikesrvm.classloader.Context;
 import org.jikesrvm.classloader.RVMField;
 import org.jikesrvm.classloader.RVMMethod;
 import org.jikesrvm.classloader.RVMType;
@@ -3200,7 +3201,8 @@ public abstract class Simplifier extends IRTools {
         } else if (calleeThis.isConstant() || calleeThis.asRegister().isPreciseType()) {
           TypeReference calleeClass = calleeThis.getType();
           if (calleeClass.isResolved()) {
-            methOp.refine(calleeClass.peekType());
+            // Octet: Static cloning: Support multiple resolved methods for every method reference.
+            methOp.refine(calleeClass.peekType(), s.position.method.getStaticContext());
             return DefUseEffect.UNCHANGED;
           }
         }
@@ -3243,6 +3245,10 @@ public abstract class Simplifier extends IRTools {
       } else if (methOp.hasPreciseTarget() && methOp.getTarget().isPure()) {
         // Look for a precise method call to a pure method with all constant arguments
         RVMMethod method = methOp.getTarget();
+
+        // Octet: Static cloning: The compiler should always call the VM-context version of this method, rather than possibly the APP-context version.
+        method = method.getMemberRef().asMethodReference().getResolvedMember(Context.VM_CONTEXT);
+
         int n = Call.getNumberOfParams(s);
         for(int i=0; i < n; i++) {
           Operand param = Call.getParam(s,i);

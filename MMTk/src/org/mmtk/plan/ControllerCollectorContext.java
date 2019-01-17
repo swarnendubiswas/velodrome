@@ -84,6 +84,9 @@ public class ControllerCollectorContext extends CollectorContext {
       // Stop all mutator threads
       if (Options.verbose.getValue() >= 5) Log.writeln("[STWController: Stopping the world...]");
       VM.collection.stopAllMutators();
+      
+      // Velodrome: Debugging method
+      if (VM.VERIFY_ASSERTIONS) { VM.assertions._assert(VM.objectModel.testOctetThreadsBeforeGCStarts()); }
 
       // Was this user triggered?
       boolean userTriggeredCollection = Plan.isUserTriggeredCollection();

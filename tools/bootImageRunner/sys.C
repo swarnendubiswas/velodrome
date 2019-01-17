@@ -1565,7 +1565,11 @@ sysMalloc(int length)
 {
     void *result=malloc(length);
     if (inRVMAddressSpace((Address)result)) {
-      fprintf(stderr,"malloc returned something that is in RVM address space: %p\n",result);
+      // Octet: avoid complaining about memory range that isn't actually an overlap error
+      // Octet: TODO: implement a better change
+      if ((int)result < 0x40000000 || (int)result >= 0x48000000) {
+        fprintf(stderr,"malloc returned something that is in RVM address space: %p\n",result);
+      }
     }
     return result;
 }

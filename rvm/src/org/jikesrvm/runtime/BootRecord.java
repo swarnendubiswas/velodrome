@@ -160,6 +160,9 @@ public class BootRecord {
    * set by -X:verboseBoot=
    */
   public int verboseBoot = 0;
+  
+  // Velodrome: Adding a non-standard argument to identify benchmark category
+  public int benchmarkCategory = 0;
 
   // RVM startoff
   //

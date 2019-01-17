@@ -14,8 +14,8 @@ package org.jikesrvm.compilers.opt.driver;
 
 import java.util.ArrayList;
 
-import org.jikesrvm.VM;
 import org.jikesrvm.ArchitectureSpecificOpt.MIROptimizationPlanner;
+import org.jikesrvm.VM;
 import org.jikesrvm.adaptive.recompilation.instrumentation.InsertInstructionCounters;
 import org.jikesrvm.adaptive.recompilation.instrumentation.InsertMethodInvocationCounter;
 import org.jikesrvm.adaptive.recompilation.instrumentation.InsertYieldpointCounters;
@@ -28,6 +28,7 @@ import org.jikesrvm.compilers.opt.LocalCastOptimization;
 import org.jikesrvm.compilers.opt.LocalConstantProp;
 import org.jikesrvm.compilers.opt.LocalCopyProp;
 import org.jikesrvm.compilers.opt.OptOptions;
+import org.jikesrvm.compilers.opt.RedundantBarrierRemover;
 import org.jikesrvm.compilers.opt.Simple;
 import org.jikesrvm.compilers.opt.bc2ir.ConvertBCtoHIR;
 import org.jikesrvm.compilers.opt.bc2ir.OsrPointConstructor;
@@ -55,6 +56,7 @@ import org.jikesrvm.compilers.opt.ssa.LoopVersioning;
 import org.jikesrvm.compilers.opt.ssa.PiNodes;
 import org.jikesrvm.compilers.opt.ssa.RedundantBranchElimination;
 import org.jikesrvm.compilers.opt.ssa.SSATuneUp;
+import org.jikesrvm.octet.Octet;
 import org.jikesrvm.osr.AdjustBCIndexes;
 
 /**
@@ -422,6 +424,7 @@ public class OptimizationPlanner {
    * @param p the plan under construction
    */
   private static void HIR2LIR(ArrayList<OptimizationPlanElement> p) {
+    RedundantBarrierRemover redundantBarrierRemover;
     composeComponents(p, "Convert HIR to LIR", new Object[]{
         // Optional printing of final HIR
         new IRPrinter("Final HIR") {
@@ -430,6 +433,14 @@ public class OptimizationPlanner {
             return options.PRINT_FINAL_HIR;
           }
         },
+
+        // Octet: decide which instructions should get instrumented
+        Octet.getClientAnalysis().newOptSelect(),
+        
+        // Octet: Unmarks instructions that don't need a barrier
+        redundantBarrierRemover = Octet.getClientAnalysis().newRedundantBarriersAnalysis(),
+        // Octet: add instrumentation early in the optimization process (if early instrumentation enabled)
+        Octet.getClientAnalysis().newOptInstr(false, redundantBarrierRemover),
 
         // Inlining "runtime service" methods
         new ExpandRuntimeServices(),
@@ -481,6 +492,9 @@ public class OptimizationPlanner {
     addComponent(p, new ReorderingPhase());
     // Perform peephole branch optimizations
     addComponent(p, new BranchOptimizations(0, false, true));
+
+    // Octet: add instrumentation late in the optimization process (if late instrumentation enabled)
+    addComponent(p, Octet.getClientAnalysis().newOptInstr(true, null));
 
     if (VM.BuildForAdaptiveSystem) {
       // Arnold & Ryder instrumentation sampling framework

@@ -253,9 +253,11 @@ public abstract class OptExecutionStateExtractor extends ExecutionStateExtractor
     OSRMapIterator iterator = osrmap.getOsrMapIteratorForMCOffset(ipOffset);
     if (VM.VerifyAssertions) VM._assert(iterator != null);
 
+    // Octet: Static cloning: Support multiple resolved methods for every method reference.
+
     ExecutionState state = new ExecutionState(thread, fpOffset, cmid, iterator.getBcIndex(), tsFPOffset);
     MethodReference mref = MemberReference.getMemberRef(iterator.getMethodId()).asMethodReference();
-    state.setMethod((NormalMethod) mref.peekResolvedMethod());
+    state.setMethod((NormalMethod) mref.peekResolvedMethod(CompiledMethods.getCompiledMethod(cmid).method.getStaticContext()));
     // this is not caller, but the callee, reverse it when outside
     // of this function.
     state.callerState = null;
@@ -269,7 +271,7 @@ public abstract class OptExecutionStateExtractor extends ExecutionStateExtractor
       if (iterator.getMethodId() != state.meth.getId()) {
         ExecutionState newstate = new ExecutionState(thread, fpOffset, cmid, iterator.getBcIndex(), tsFPOffset);
         mref = MemberReference.getMemberRef(iterator.getMethodId()).asMethodReference();
-        newstate.setMethod((NormalMethod) mref.peekResolvedMethod());
+        newstate.setMethod((NormalMethod) mref.peekResolvedMethod(CompiledMethods.getCompiledMethod(cmid).method.getStaticContext()));
         // this is not caller, but the callee, reverse it when outside
         // of this function.
         newstate.callerState = state;

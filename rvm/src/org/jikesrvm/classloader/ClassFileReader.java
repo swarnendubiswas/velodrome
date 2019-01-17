@@ -310,15 +310,28 @@ public class ClassFileReader implements Constants, ClassLoaderConstants {
     if (numMethods == 0) {
       declaredMethods = RVMType.emptyVMMethod;
     } else {
-      declaredMethods = new RVMMethod[numMethods];
+      // Octet: Static cloning: Support multiple resolved methods for every method reference.
+      // Velodrome: Context: Different categories of methods may have different number of static contexts
+      if (Context.hasMultipleStaticContexts(typeRef)) {
+        declaredMethods = new RVMMethod[numMethods * Context.getNumberOfStaticContexts(typeRef)];
+      } else {
+        declaredMethods = new RVMMethod[numMethods];
+      }
+      int numMethodsInclContexts = 0;
       for (int i = 0; i < numMethods; i++) {
         short mmodifiers = input.readShort();
         Atom methodName = getUtf(constantPool, input.readUnsignedShort());
         Atom methodDescriptor = getUtf(constantPool, input.readUnsignedShort());
         MemberReference memRef = MemberReference.findOrCreate(typeRef, methodName, methodDescriptor);
-        RVMMethod method = RVMMethod.readMethod(typeRef, constantPool, memRef, mmodifiers, input);
-        declaredMethods[i] = method;
+        int[] staticContexts = Context.getStaticContexts(memRef.asMethodReference());
+        RVMMethod method = RVMMethod.readMethod(typeRef, constantPool, memRef, mmodifiers, input, staticContexts[0]);
+        declaredMethods[numMethodsInclContexts++] = method;
+        // Velodrome: Context: Create additional RVMMethods as necessary 
+        for (int j = 1; j < staticContexts.length; j++) {
+          declaredMethods[numMethodsInclContexts++] = method.cloneMethod(staticContexts[j]);
+        }
       }
+      if (VM.VerifyAssertions) { VM._assert(numMethodsInclContexts == declaredMethods.length); } 
     }
     return declaredMethods;
   }

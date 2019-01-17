@@ -20,6 +20,7 @@ import org.jikesrvm.adaptive.controller.Controller;
 import org.jikesrvm.classloader.BytecodeConstants;
 import org.jikesrvm.classloader.BytecodeStream;
 import org.jikesrvm.classloader.ClassLoaderConstants;
+import org.jikesrvm.classloader.Context;
 import org.jikesrvm.classloader.RVMClass;
 import org.jikesrvm.classloader.RVMField;
 import org.jikesrvm.classloader.FieldReference;
@@ -1609,6 +1610,12 @@ public final class BC2IR
                   // VM.sysWrite("Replaced getstatic of "+field+" with "+rhs+"\n");
                   push(rhs, fieldType);
                   break;
+                // Octet: TODO: Is this catch no longer needed after the port to Jikes 3.1.3?
+                // Octet: LATER: This catch block avoids an error due to upgrading to a new JDK version in October 2012.
+                // There's a more complete fix coming in Jikes 3.1.3.
+                } catch (NullPointerException e) {
+                  if (VM.VerifyAssertions) { VM._assert(!VM.runningVM); }
+                  System.out.println("Ignoring unexpected NPE when trying to chase constant field at bootimage build time: " + field);
                 } catch (NoSuchFieldException e) {
                   if (VM.runningVM) {
                     throw new Error("Unexpected exception", e);
@@ -1776,6 +1783,8 @@ public final class BC2IR
         }
         break;
 
+        // Octet: Static cloning: Modified various invoke cases to support multiple resolved methods for every method reference.
+
         case JBC_invokevirtual: {
           MethodReference ref = bcodes.getMethodReference();
 
@@ -1815,7 +1824,7 @@ public final class BC2IR
             // to prove one implies the other.
             RVMMethod vmeth = null;
             if (receiverType != null && receiverType.isInitialized() && !receiverType.isInterface()) {
-              vmeth = ClassLoaderProxy.lookupMethod(receiverType, ref);
+              vmeth = ClassLoaderProxy.lookupMethod(receiverType, ref, gc.method.getStaticContext());
             }
             if (vmeth != null) {
               MethodReference vmethRef = vmeth.getMemberRef().asMethodReference();
@@ -1846,7 +1855,18 @@ public final class BC2IR
           } else {
             // A normal invokevirtual.  Create call instruction.
             boolean unresolved = ref.needsDynamicLink(bcodes.getMethod());
-            RVMMethod target = ref.peekResolvedMethod();
+            // Velodrome: Context: Compute context if the current method is non-application while the invoked method is an 
+            // application method.
+            int context = gc.method.getStaticContext();
+            if (!Context.isApplicationPrefix(gc.method.getDeclaringClass().getTypeRef()) 
+                && Context.isApplicationPrefix(ref.getType())) {
+              if (ref.isNonAtomic) {
+                context = Context.NONTRANS_CONTEXT;
+              } else {
+                context = Context.TRANS_CONTEXT;
+              }
+            }
+            RVMMethod target = ref.peekResolvedMethod(context);
             MethodOperand methOp = MethodOperand.VIRTUAL(ref, target);
 
             s = _callHelper(ref, methOp);
@@ -1896,7 +1916,7 @@ public final class BC2IR
               if (type.isClassType()) {
                 RVMMethod vmeth = target;
                 if (target == null || type != target.getDeclaringClass()) {
-                  vmeth = ClassLoaderProxy.lookupMethod(type.asClass(), ref);
+                  vmeth = ClassLoaderProxy.lookupMethod(type.asClass(), ref, context);
                 }
                 if (vmeth != null) {
                   methOp.refine(vmeth, isPreciseType || type.asClass().isFinal());
@@ -1921,7 +1941,18 @@ public final class BC2IR
 
         case JBC_invokespecial: {
           MethodReference ref = bcodes.getMethodReference();
-          RVMMethod target = ref.resolveInvokeSpecial();
+          // Velodrome: Context: Compute context if the current method is non-application while the invoked method is an 
+          // application method.
+          int context = gc.method.getStaticContext();
+          if (!Context.isApplicationPrefix(gc.method.getDeclaringClass().getTypeRef()) &&
+              Context.isApplicationPrefix(ref.getType())) {
+            if (ref.isNonAtomic) {
+              context = Context.NONTRANS_CONTEXT;
+            } else {
+              context = Context.TRANS_CONTEXT;
+            }
+          }
+          RVMMethod target = ref.resolveInvokeSpecial(context);
 
           /* just create an osr barrier right before _callHelper
            * changes the states of locals and stacks.
@@ -1977,7 +2008,18 @@ public final class BC2IR
 
           // A non-magical invokestatic.  Create call instruction.
           boolean unresolved = ref.needsDynamicLink(bcodes.getMethod());
-          RVMMethod target = ref.peekResolvedMethod();
+          // Velodrome: Context: Compute context if the current method is non-application while the invoked method is an 
+          // application method.
+          int context = gc.method.getStaticContext();
+          if (!Context.isApplicationPrefix(gc.method.getDeclaringClass().getTypeRef()) &&
+              Context.isApplicationPrefix(ref.getType())) {
+            if (ref.isNonAtomic) {
+              context = Context.NONTRANS_CONTEXT;
+            } else {
+              context = Context.TRANS_CONTEXT;
+            }
+          }
+          RVMMethod target = ref.peekResolvedMethod(context);
 
           /* just create an osr barrier right before _callHelper
           * changes the states of locals and stacks.
@@ -2018,7 +2060,12 @@ public final class BC2IR
           MethodReference ref = bcodes.getMethodReference();
           bcodes.alignInvokeInterface();
           RVMMethod resolvedMethod = null;
-          resolvedMethod = ref.peekInterfaceMethod();
+          // Velodrome: Context: Interface invocation for non-application methods can only have VM_CONTEXT
+          int context = gc.method.getStaticContext();
+          if (!Context.isApplicationPrefix(ref.getType())) {
+            context = Context.VM_CONTEXT;
+          }
+          resolvedMethod = ref.peekInterfaceMethod(context);
 
           /* just create an osr barrier right before _callHelper
            * changes the states of locals and stacks.
@@ -2049,12 +2096,13 @@ public final class BC2IR
             // to an out-of-line typechecking routine to handle it at runtime.
             RVMMethod target = Entrypoints.unresolvedInvokeinterfaceImplementsTestMethod;
             Instruction callCheck =
-              Call.create2(CALL,
+              Call.create3(CALL,
                            null,
                            new AddressConstantOperand(target.getOffset()),
                            MethodOperand.STATIC(target),
                            new IntConstantOperand(ref.getId()),
-                           receiver.copy());
+                           receiver.copy(),
+                           IRTools.IC(context));
             if (gc.options.H2L_NO_CALLEE_EXCEPTIONS) {
               callCheck.markAsNonPEI();
             }
@@ -2093,7 +2141,7 @@ public final class BC2IR
           // to prove one implies the other.
           RVMMethod vmeth = null;
           if (receiverType != null && receiverType.isInitialized() && !receiverType.isInterface()) {
-            vmeth = ClassLoaderProxy.lookupMethod(receiverType, ref);
+            vmeth = ClassLoaderProxy.lookupMethod(receiverType, ref, gc.method.getStaticContext());
           }
           if (vmeth != null) {
             MethodReference vmethRef = vmeth.getMemberRef().asMethodReference();
@@ -4622,6 +4670,14 @@ public final class BC2IR
     if (Call.getMethod(call).getTarget() == null) {
       return InlineDecision.NO("Target method is null");
     }
+    // Velodrome: Don't allow inlining a Tx into a non-Tx
+    if (VM.runningVM && VM.VerifyAssertions) {
+      if (gc.method.getMemberRef().asMethodReference().isNonAtomic && 
+          !Call.getMethod(call).getTarget().getMemberRef().asMethodReference().isNonAtomic) {
+        return InlineDecision.NO("AVD Shouldn't inline Tx into non-Tx");
+      }
+    }
+
     CompilationState state = new CompilationState(call, isExtant, gc.options, gc.original_cm, realBCI);
     InlineDecision d = gc.inlinePlan.shouldInline(state);
     return d;
@@ -4648,7 +4704,15 @@ public final class BC2IR
       if (VM.VerifyAssertions) VM._assert(lastOsrBarrier != null);
       callSite.scratchObject = lastOsrBarrier;
     }
-
+    
+    // Velodrome: Assert that a Tx is not inlined into a non-Tx
+    if (VM.runningVM && VM.VerifyAssertions) {
+      if (gc.method.getMemberRef().asMethodReference().isNonAtomic 
+          && !Call.getMethod(callSite).getTarget().getMemberRef().asMethodReference().isNonAtomic) {
+        VM.sysFail("Shouldn't inline a Tx into a non-Tx");
+      }
+    }
+    
     // Execute the inline decision.
     // NOTE: It is tempting to wrap the call to Inliner.execute in
     // a try/catch block that suppresses MagicNotImplemented failures

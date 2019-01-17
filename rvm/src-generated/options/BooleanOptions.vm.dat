@@ -38,3 +38,6 @@ Trace when calls into JNI happen
 countThreadTransitions false
 Count, and report, the number of thread state transitions.  This works better on IA32 than on PPC at the moment.
 
+# Octet: command-line option(s)
+octetForceHardAffinity false
+Force each Octet thread to be bound to its own processor. All Octet threads are distributed evenly across cpuID 0 to n-1 for n available processors.

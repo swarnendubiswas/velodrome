@@ -783,6 +783,23 @@ public final class Atom {
     return false;
   }
 
+  /** Octet: Static cloning: Help decision-making for deciding static contexts. */
+  @Uninterruptible
+  @Pure
+  public boolean isPrefix(byte[][] prefixes) {
+    outer:
+      for (final byte[] test : prefixes) {
+        if (test.length > val.length) continue;
+        for (int j = 0; j < test.length; j++) {
+          if (val[j] != test[j]) {
+            continue outer;
+          }
+        }
+        return true;
+      }
+    return false;
+  }
+  
   /**
    * @return true if this is a class descriptor of a RVM core class.  This is
    * defined as one that it would be unwise to invalidate, since invalidating

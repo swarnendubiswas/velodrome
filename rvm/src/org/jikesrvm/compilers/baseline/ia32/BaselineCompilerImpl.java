@@ -12,12 +12,37 @@
  */
 package org.jikesrvm.compilers.baseline.ia32;
 
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_ADDRESS_PUTFIELD_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_BOOLEAN_PUTFIELD_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_BYTE_ASTORE_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_BYTE_PUTFIELD_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_CHAR_ASTORE_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_CHAR_PUTFIELD_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_DOUBLE_ASTORE_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_DOUBLE_PUTFIELD_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_EXTENT_PUTFIELD_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_FLOAT_ASTORE_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_FLOAT_PUTFIELD_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_INT_ASTORE_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_INT_PUTFIELD_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_LONG_ASTORE_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_LONG_PUTFIELD_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_OBJECT_ALOAD_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_OBJECT_GETFIELD_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_OBJECT_GETSTATIC_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_OBJECT_PUTFIELD_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_OBJECT_PUTSTATIC_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_OFFSET_PUTFIELD_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_SHORT_ASTORE_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_SHORT_PUTFIELD_BARRIER;
+import static org.jikesrvm.mm.mminterface.Barriers.NEEDS_WORD_PUTFIELD_BARRIER;
+
 import org.jikesrvm.SizeConstants;
-import static org.jikesrvm.mm.mminterface.Barriers.*;
 import org.jikesrvm.VM;
 import org.jikesrvm.adaptive.AosEntrypoints;
 import org.jikesrvm.adaptive.recompilation.InvocationCounts;
 import org.jikesrvm.classloader.Atom;
+import org.jikesrvm.classloader.Context;
 import org.jikesrvm.classloader.DynamicTypeCheck;
 import org.jikesrvm.classloader.FieldReference;
 import org.jikesrvm.classloader.InterfaceInvocation;
@@ -43,6 +68,7 @@ import org.jikesrvm.jni.ia32.JNICompiler;
 import org.jikesrvm.mm.mminterface.MemoryManager;
 import org.jikesrvm.objectmodel.JavaHeaderConstants;
 import org.jikesrvm.objectmodel.ObjectModel;
+import org.jikesrvm.octet.Octet;
 import org.jikesrvm.runtime.ArchEntrypoints;
 import org.jikesrvm.runtime.Entrypoints;
 import org.jikesrvm.runtime.Magic;
@@ -50,6 +76,7 @@ import org.jikesrvm.runtime.MagicNames;
 import org.jikesrvm.runtime.RuntimeEntrypoints;
 import org.jikesrvm.runtime.Statics;
 import org.jikesrvm.scheduler.RVMThread;
+import org.jikesrvm.velodrome.Velodrome;
 import org.vmmagic.pragma.Inline;
 import org.vmmagic.pragma.Uninterruptible;
 import org.vmmagic.unboxed.Offset;
@@ -74,6 +101,9 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
   static final Offset FOUR_SLOTS = THREE_SLOTS.plus(WORDSIZE);
   static final Offset FIVE_SLOTS = FOUR_SLOTS.plus(WORDSIZE);
   private static final Offset MINUS_ONE_SLOT = NO_SLOT.minus(WORDSIZE);
+
+  /** Octet: baseline instrumentation helper */
+  final OctetBaselineInstr octetBaselineInstr = Octet.getClientAnalysis().newBaselineInstr();
 
   /**
    * Create a BaselineCompilerImpl object for the compilation of method.
@@ -462,11 +492,24 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
 
   @Override
   protected final void emit_iaload() {
+
+    // Velodrome: Conditional instrumentation of array accesses
+    if (Velodrome.instrumentArrays()) {
+      // Octet: insert barrier
+      octetBaselineInstr.insertArrayBarrier(method, biStart, true, ONE_SLOT, TypeReference.Int, asm);
+    }
+
     asm.emitPOP_Reg(T0); // T0 is array index
     asm.emitPOP_Reg(S0); // S0 is array ref
     genBoundsCheck(asm, T0, S0); // T0 is index, S0 is address of array
     // push [S0+T0<<2]
     asm.emitPUSH_RegIdx(S0, T0, Assembler.WORD, NO_SLOT);
+    
+    // Velodrome: Insert post-barriers
+    if (Velodrome.instrumentArrays()) {
+      VelodromeBaselineInstr.insertPostBarrierForArray(method, biStart, true, S0, T0, TypeReference.Int, asm);
+    }
+    
   }
 
   @Override
@@ -477,24 +520,74 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
 
   @Override
   protected final void emit_aaload() {
+
+    // Velodrome: Conditional instrumentation of array accesses
+    if (Velodrome.instrumentArrays()) {
+      // Octet: insert barrier
+      octetBaselineInstr.insertArrayBarrier(method, biStart, true, ONE_SLOT, TypeReference.ObjectReference, asm);
+    }
+
     asm.emitPOP_Reg(T0); // T0 is array index
     asm.emitPOP_Reg(T1); // T1 is array ref
     genBoundsCheck(asm, T0, T1); // T0 is index, T1 is address of array
     if (NEEDS_OBJECT_ALOAD_BARRIER) {
+      
+      // Velodrome: save ref and index values
+      if (Velodrome.instrumentArrays()) {
+        asm.emitPUSH_Reg(T1); // T1 is array ref
+        asm.emitPUSH_Reg(T0); // T0 is array index
+      }
+      
       // rewind 2 args on stack
       asm.emitPUSH_Reg(T1); // T1 is array ref
       asm.emitPUSH_Reg(T0); // T0 is array index
       Barriers.compileArrayLoadBarrier(asm, true);
+      
+      // Velodrome: restore ref and index values
+      if (Velodrome.instrumentArrays()) {
+        asm.emitPOP_Reg(S0);
+        asm.emitPOP_Reg(T0); // T0 is array index
+        asm.emitPOP_Reg(T1); // T1 is array ref
+        asm.emitPUSH_Reg(S0);
+      }
+      
     } else {
       asm.emitPUSH_RegIdx(T1, T0, (short)LG_WORDSIZE, NO_SLOT); // push [S0+T0*WORDSIZE]
     }
+    
+    // Velodrome: Insert post-barriers
+    if (Velodrome.instrumentArrays()) {
+      VelodromeBaselineInstr.insertPostBarrierForArray(method, biStart, true, T1, T0, TypeReference.ObjectReference, asm);
+    }
+    
   }
 
   @Override
   protected final void emit_caload() {
+
+    // Velodrome: Eclipse6 throws an exception while reading a character array in method getNextToken(). Now if the 
+    // pre-barrier comes before the array bounds check, then in such cases, pre-barrier would be executed but the 
+    // post-barrier won't since the control will switch to the exception block. To avoid this problem, we insert the 
+    // Octet pre-barrier after the array bounds check. 
+    
+    // Velodrome: Duplicate the array index and array ref
+    if (Velodrome.instrumentArrays()) {
+      asm.emitPUSH_RegDisp(SP, ONE_SLOT); // array ref
+      asm.emitPUSH_RegDisp(SP, ONE_SLOT); // array index
+    }
+
     asm.emitPOP_Reg(T0); // T0 is array index
     asm.emitPOP_Reg(S0); // S0 is array ref
     genBoundsCheck(asm, T0, S0); // T0 is index, S0 is address of array
+    
+    // Velodrome: Conditional instrumentation of array accesses
+    if (Velodrome.instrumentArrays()) {
+      // Octet: insert barrier after array bounds check
+      octetBaselineInstr.insertArrayBarrier(method, biStart, true, ONE_SLOT, TypeReference.Char, asm);
+      asm.emitPOP_Reg(T0); // T0 is array index
+      asm.emitPOP_Reg(S0); // S0 is array ref
+    }
+    
     // T1 = (int)[S0+T0<<1]
     if (VM.BuildFor32Addr) {
       asm.emitMOVZX_Reg_RegIdx_Word(T1, S0, T0, Assembler.SHORT, NO_SLOT);
@@ -502,10 +595,23 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
       asm.emitMOVZXQ_Reg_RegIdx_Word(T1, S0, T0, Assembler.SHORT, NO_SLOT);
     }
     asm.emitPUSH_Reg(T1);        // push short onto stack
+    
+    // Velodrome: Insert post-barriers
+    if (Velodrome.instrumentArrays()) {
+      VelodromeBaselineInstr.insertPostBarrierForArray(method, biStart, true, S0, T0, TypeReference.Char, asm);
+    }
+    
   }
 
   @Override
   protected final void emit_saload() {
+
+    // Velodrome: Conditional instrumentation of array accesses
+    if (Velodrome.instrumentArrays()) {
+      // Octet: insert barrier
+      octetBaselineInstr.insertArrayBarrier(method, biStart, true, ONE_SLOT, TypeReference.Short, asm);
+    }
+
     asm.emitPOP_Reg(T0); // T0 is array index
     asm.emitPOP_Reg(S0); // S0 is array ref
     genBoundsCheck(asm, T0, S0); // T0 is index, S0 is address of array
@@ -516,10 +622,23 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
       asm.emitMOVSXQ_Reg_RegIdx_Word(T1, S0, T0, Assembler.SHORT, NO_SLOT);
     }
     asm.emitPUSH_Reg(T1);        // push short onto stack
+    
+    // Velodrome: Insert post-barriers
+    if (Velodrome.instrumentArrays()) {
+      VelodromeBaselineInstr.insertPostBarrierForArray(method, biStart, true, S0, T0, TypeReference.Short, asm);
+    }
+    
   }
 
   @Override
   protected final void emit_baload() {
+
+    // Velodrome: Conditional instrumentation of array accesses
+    if (Velodrome.instrumentArrays()) {
+      // Octet: insert barrier
+      octetBaselineInstr.insertArrayBarrier(method, biStart, true, ONE_SLOT, TypeReference.Byte, asm);
+    }
+
     asm.emitPOP_Reg(T0); // T0 is array index
     asm.emitPOP_Reg(S0); // S0 is array ref
     genBoundsCheck(asm, T0, S0); // T0 is index, S0 is address of array
@@ -530,10 +649,23 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
       asm.emitMOVSXQ_Reg_RegIdx_Byte(T1, S0, T0, Assembler.BYTE, NO_SLOT);
     }
     asm.emitPUSH_Reg(T1);        // push byte onto stack
+    
+    // Velodrome: Insert post-barriers
+    if (Velodrome.instrumentArrays()) {
+      VelodromeBaselineInstr.insertPostBarrierForArray(method, biStart, true, S0, T0, TypeReference.Byte, asm);
+    }
+    
   }
 
   @Override
   protected final void emit_laload() {
+
+    // Velodrome: Conditional instrumentation of array accesses
+    if (Velodrome.instrumentArrays()) {
+      // Octet: insert barrier
+      octetBaselineInstr.insertArrayBarrier(method, biStart, true, ONE_SLOT, TypeReference.Long, asm);
+    }
+
     asm.emitPOP_Reg(T0); // T0 is array index
     asm.emitPOP_Reg(T1); // T1 is array ref
     if (VM.BuildFor32Addr && SSE2_BASE) {
@@ -552,6 +684,12 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
       adjustStack(-WORDSIZE, true);
       asm.emitPUSH_RegIdx(T1, T0, Assembler.LONG, NO_SLOT);  // load desired long array element
     }
+    
+    // Velodrome: Insert post-barriers
+    if (Velodrome.instrumentArrays()) {
+      VelodromeBaselineInstr.insertPostBarrierForArray(method, biStart, true, T1, T0, TypeReference.Long, asm);
+    }
+    
   }
 
   @Override
@@ -573,6 +711,49 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
     stackMoveHelper(T0, index); // T0 is array index
     stackMoveHelper(S0, arrayRef); // S0 is array ref
     genBoundsCheck(asm, T0, S0); // T0 is index, S0 is address of array
+
+    // Velodrome: save a duplicate copy of the ref and index values on stack, to be used by post barrier
+    if (Velodrome.instrumentArrays()) {
+      if (index.EQ(ONE_SLOT) && arrayRef.EQ(TWO_SLOTS)) {
+        saveRefIdx(1);
+      } else {
+        if (VM.VerifyAssertions) { VM._assert(index.EQ(TWO_SLOTS) && arrayRef.EQ(THREE_SLOTS)); }
+        saveRefIdx(2);
+      }
+    }
+
+  }
+  
+  /** Velodrome: save a duplicate copy of the ref and index values on stack, to be used by post barrier
+  *
+  *    |   |      SP->|idx|
+  *    |   |          |ref|
+  *SP->|idx|  =>      |idx|
+  *    |ref|          |ref|
+  *    |___|          |___|
+  */
+  private void saveRefIdx(int valueLen) {
+    if (VM.VerifyAssertions) { VM._assert(Velodrome.instrumentArrays()); }
+    if (valueLen == 1) {
+      asm.emitPOP_Reg(T1); // T1 is the value to be stored
+      asm.emitPUSH_RegDisp(SP, ONE_SLOT);
+      asm.emitPUSH_RegDisp(SP, ONE_SLOT);
+      asm.emitPUSH_Reg(T1);
+    } else if (valueLen == 2){
+      asm.emitPOP_Reg(T1);
+      asm.emitPOP_Reg(S0);
+      asm.emitPUSH_RegDisp(SP, ONE_SLOT);
+      asm.emitPUSH_RegDisp(SP, ONE_SLOT);
+      asm.emitPUSH_Reg(S0);
+      asm.emitPUSH_Reg(T1);
+    }
+  }
+
+  // Velodrome: restore ref and index values from stack
+  private void restoreRefIdxReg(GPR ref, GPR idx) {
+    if (VM.VerifyAssertions) { VM._assert(Velodrome.instrumentArrays()); }
+    asm.emitPOP_Reg(idx);
+    asm.emitPOP_Reg(ref);
   }
 
   /**
@@ -641,6 +822,13 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
 
   @Override
   protected final void emit_iastore() {
+    
+    // Velodrome: Conditional instrumentation of array accesses
+    if (Velodrome.instrumentArrays()) {
+      // Octet: insert barrier
+      octetBaselineInstr.insertArrayBarrier(method, biStart, false, TWO_SLOTS, TypeReference.Int, asm);
+    }
+
     Barriers.compileModifyCheck(asm, 8);
     if (NEEDS_INT_ASTORE_BARRIER) {
       boundsCheckHelper(ONE_SLOT, TWO_SLOTS);
@@ -648,23 +836,61 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
     } else {
       arrayStore32bitHelper();
     }
+    
+    // Velodrome: Insert post-barrier
+    if (Velodrome.instrumentArrays()) {
+      VelodromeBaselineInstr.insertPostBarrierForArray(method, biStart, false, S0, T0, TypeReference.Int, asm);
+    }
+    
   }
 
   @Override
   protected final void emit_fastore() {
+    
+    // Velodrome: Conditional instrumentation of array accesses
+    if (Velodrome.instrumentArrays()) {
+      // Octet: insert barrier
+      octetBaselineInstr.insertArrayBarrier(method, biStart, false, TWO_SLOTS, TypeReference.Float, asm);
+    }
+
     Barriers.compileModifyCheck(asm, 8);
     if (NEEDS_FLOAT_ASTORE_BARRIER) {
       boundsCheckHelper(ONE_SLOT, TWO_SLOTS);
       Barriers.compileArrayStoreBarrierFloat(asm, this);
+      
+      // Velodrome: restore ref and index values from stack
+      if (Velodrome.instrumentArrays()) {
+        restoreRefIdxReg(S0, T0);
+      }
+      
     } else {
       arrayStore32bitHelper();
     }
+    
+    // Velodrome: Insert post-barrier
+    if (Velodrome.instrumentArrays()) {
+      VelodromeBaselineInstr.insertPostBarrierForArray(method, biStart, false, S0, T0, TypeReference.Float, asm);
+    }
+    
   }
 
 
   @Override
   protected final void emit_aastore() {
+    
+    // Velodrome: Conditional instrumentation of array accesses
+    if (Velodrome.instrumentArrays()) {
+      // Octet: insert barrier
+      octetBaselineInstr.insertArrayBarrier(method, biStart, false, TWO_SLOTS, TypeReference.ObjectReference, asm);
+    }
+
     Barriers.compileModifyCheck(asm, 8);
+    
+    // Velodrome: save ref and idx on stack
+    if (Velodrome.instrumentArrays()) {
+      saveRefIdx(1);
+    }
+    
     if (doesCheckStore) {
       genParameterRegisterLoad(asm, 3);
       asm.emitCALL_Abs(Magic.getTocPointer().plus(Entrypoints.aastoreMethod.getOffset()));
@@ -672,36 +898,95 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
       genParameterRegisterLoad(asm, 3);
       asm.emitCALL_Abs(Magic.getTocPointer().plus(Entrypoints.aastoreUninterruptibleMethod.getOffset()));
     }
+    
+    // Velodrome: Insert post-barrier
+    if (Velodrome.instrumentArrays()) {
+      // Velodrome: restore ref and index values from stack
+      restoreRefIdxReg(S0, T0);
+      VelodromeBaselineInstr.insertPostBarrierForArray(method, biStart, false, S0, T0, TypeReference.ObjectReference, asm);
+    }
+    
   }
 
   @Override
   protected final void emit_castore() {
+    
+    // Velodrome: Conditional instrumentation of array accesses
+    if (Velodrome.instrumentArrays()) {
+      // Octet: insert barrier
+      octetBaselineInstr.insertArrayBarrier(method, biStart, false, TWO_SLOTS, TypeReference.Char, asm);
+    }
+
     Barriers.compileModifyCheck(asm, 8);
     if (NEEDS_CHAR_ASTORE_BARRIER) {
       boundsCheckHelper(ONE_SLOT, TWO_SLOTS);
       Barriers.compileArrayStoreBarrierChar(asm, this);
+      
+      // Velodrome: restore ref and index values from stack
+      if (Velodrome.instrumentArrays()) {
+        restoreRefIdxReg(S0, T0);
+      }
+      
     } else {
       arrayStore16bitHelper();
     }
+    
+    // Velodrome: Insert post-barrier
+    if (Velodrome.instrumentArrays()) {
+      VelodromeBaselineInstr.insertPostBarrierForArray(method, biStart, false, S0, T0, TypeReference.Char, asm);
+    }
+    
   }
 
   @Override
   protected final void emit_sastore() {
+    
+    // Velodrome: Conditional instrumentation of array accesses
+    if (Velodrome.instrumentArrays()) {
+      // Octet: insert barrier
+      octetBaselineInstr.insertArrayBarrier(method, biStart, false, TWO_SLOTS, TypeReference.Short, asm);
+    }
+
     Barriers.compileModifyCheck(asm, 8);
     if (NEEDS_SHORT_ASTORE_BARRIER) {
       boundsCheckHelper(ONE_SLOT, TWO_SLOTS);
       Barriers.compileArrayStoreBarrierShort(asm, this);
+      
+      // Velodrome: restore ref and index values from stack
+      if (Velodrome.instrumentArrays()) {
+        restoreRefIdxReg(S0, T0);
+      }
+      
     } else {
       arrayStore16bitHelper();
     }
+    
+    // Velodrome: Insert post-barrier
+    if (Velodrome.instrumentArrays()) {
+      VelodromeBaselineInstr.insertPostBarrierForArray(method, biStart, false, S0, T0, TypeReference.Short, asm);
+    }
+    
   }
 
   @Override
   protected final void emit_bastore() {
+    
+    // Velodrome: Conditional instrumentation of array accesses
+    if (Velodrome.instrumentArrays()) {
+      // Octet: insert barrier
+      octetBaselineInstr.insertArrayBarrier(method, biStart, false, TWO_SLOTS, TypeReference.Byte, asm);
+    }
+
     Barriers.compileModifyCheck(asm, 8);
     if (NEEDS_BYTE_ASTORE_BARRIER) {
       boundsCheckHelper(ONE_SLOT, TWO_SLOTS);
       Barriers.compileArrayStoreBarrierByte(asm, this);
+      
+      // Velodrome: restore ref and index values from stack
+      if (Velodrome.instrumentArrays()) {
+        restoreRefIdxReg(S0, T0);
+      }
+      
     } else {
       asm.emitPOP_Reg(T1); // T1 is the value
       asm.emitPOP_Reg(T0); // T0 is array index
@@ -709,28 +994,72 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
       genBoundsCheck(asm, T0, S0);         // T0 is index, S0 is address of array
       asm.emitMOV_RegIdx_Reg_Byte(S0, T0, Assembler.BYTE, NO_SLOT, T1); // [S0 + T0<<2] <- T1
     }
+    
+    // Velodrome: Insert post-barrier
+    if (Velodrome.instrumentArrays()) {
+      VelodromeBaselineInstr.insertPostBarrierForArray(method, biStart, false, S0, T0, TypeReference.Byte, asm);
+    }
+    
   }
 
   @Override
   protected final void emit_lastore() {
+    
+    // Velodrome: Conditional instrumentation of array accesses
+    if (Velodrome.instrumentArrays()) {
+      // Octet: insert barrier
+      octetBaselineInstr.insertArrayBarrier(method, biStart, false, THREE_SLOTS, TypeReference.Long, asm);
+    }
+
     Barriers.compileModifyCheck(asm, 12);
     if (NEEDS_LONG_ASTORE_BARRIER) {
       boundsCheckHelper(TWO_SLOTS, THREE_SLOTS);
       Barriers.compileArrayStoreBarrierLong(asm, this);
+      
+      // Velodrome: restore ref and index values from stack
+      if (Velodrome.instrumentArrays()) {
+        restoreRefIdxReg(S0, T0);
+      }
+
     } else {
       arrayStore64bitHelper();
     }
+    
+    // Velodrome: Insert post-barrier
+    if (Velodrome.instrumentArrays()) {
+      VelodromeBaselineInstr.insertPostBarrierForArray(method, biStart, false, S0, T0, TypeReference.Long, asm);
+    }
+    
   }
 
   @Override
   protected final void emit_dastore() {
+
+    // Velodrome: Conditional instrumentation of array accesses
+    if (Velodrome.instrumentArrays()) {
+      // Octet: insert barrier
+      octetBaselineInstr.insertArrayBarrier(method, biStart, false, THREE_SLOTS, TypeReference.Double, asm);
+    }
+
     Barriers.compileModifyCheck(asm, 12);
     if (NEEDS_DOUBLE_ASTORE_BARRIER) {
       boundsCheckHelper(TWO_SLOTS, THREE_SLOTS);
       Barriers.compileArrayStoreBarrierDouble(asm, this);
+      
+      // Velodrome: restore ref and index values from stack
+      if (Velodrome.instrumentArrays()) {
+        restoreRefIdxReg(S0, T0);
+      }
+      
     } else {
       arrayStore64bitHelper();
     }
+    
+    // Velodrome: Insert post-barrier
+    if (Velodrome.instrumentArrays()) {
+      VelodromeBaselineInstr.insertPostBarrierForArray(method, biStart, false, S0, T0, TypeReference.Double, asm);
+    }
+    
   }
 
   /*
@@ -2160,6 +2489,14 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
   @Override
   protected final void emit_ireturn() {
     if (method.isSynchronized()) genMonitorExit();
+
+    // Velodrome: Insert instrumentation at method return
+    if (Octet.shouldInstrumentMethod(method) && (Velodrome.methodsAsTransactions() || method.isSynchronized() && Velodrome.syncBlocksAsTransactions())) {
+      if (Context.isTRANSContext(method.getStaticContext()) && Context.isNONTRANSContext(method.getResolvedContext())) {
+        VelodromeBaselineInstr.insertInstrumentationAtTransactionEnd(method, biStart, asm, octetBaselineInstr, method.getId());
+      }
+    }
+    
     asm.emitPOP_Reg(T0);
     genEpilogue(WORDSIZE, WORDSIZE);
   }
@@ -2167,6 +2504,14 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
   @Override
   protected final void emit_lreturn() {
     if (method.isSynchronized()) genMonitorExit();
+
+    // Velodrome: Insert instrumentation at method return
+    if (Octet.shouldInstrumentMethod(method) && (Velodrome.methodsAsTransactions() || method.isSynchronized() && Velodrome.syncBlocksAsTransactions())) {
+      if (Context.isTRANSContext(method.getStaticContext()) && Context.isNONTRANSContext(method.getResolvedContext())) {
+        VelodromeBaselineInstr.insertInstrumentationAtTransactionEnd(method, biStart, asm, octetBaselineInstr, method.getId());
+      }
+    }
+
     if (VM.BuildFor32Addr) {
       asm.emitPOP_Reg(T1); // low half
       asm.emitPOP_Reg(T0); // high half
@@ -2180,6 +2525,14 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
   @Override
   protected final void emit_freturn() {
     if (method.isSynchronized()) genMonitorExit();
+
+    // Velodrome: Insert instrumentation at method return
+    if (Octet.shouldInstrumentMethod(method) && (Velodrome.methodsAsTransactions() || method.isSynchronized() && Velodrome.syncBlocksAsTransactions())) {
+      if (Context.isTRANSContext(method.getStaticContext()) && Context.isNONTRANSContext(method.getResolvedContext())) {
+        VelodromeBaselineInstr.insertInstrumentationAtTransactionEnd(method, biStart, asm, octetBaselineInstr, method.getId());
+      }
+    }
+    
     if (SSE2_FULL) {
       asm.emitMOVSS_Reg_RegInd(XMM0, SP);
     } else {
@@ -2191,6 +2544,14 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
   @Override
   protected final void emit_dreturn() {
     if (method.isSynchronized()) genMonitorExit();
+
+    // Velodrome: Insert instrumentation at method return
+    if (Octet.shouldInstrumentMethod(method) && (Velodrome.methodsAsTransactions() || method.isSynchronized() && Velodrome.syncBlocksAsTransactions())) {
+      if (Context.isTRANSContext(method.getStaticContext()) && Context.isNONTRANSContext(method.getResolvedContext())) {
+        VelodromeBaselineInstr.insertInstrumentationAtTransactionEnd(method, biStart, asm, octetBaselineInstr, method.getId());
+      }
+    }
+
     if (SSE2_FULL) {
       asm.emitMOVLPD_Reg_RegInd(XMM0, SP);
     } else {
@@ -2202,6 +2563,14 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
   @Override
   protected final void emit_areturn() {
     if (method.isSynchronized()) genMonitorExit();
+
+    // Velodrome: Insert instrumentation at method return
+    if (Octet.shouldInstrumentMethod(method) && (Velodrome.methodsAsTransactions() || method.isSynchronized() && Velodrome.syncBlocksAsTransactions())) {
+      if (Context.isTRANSContext(method.getStaticContext()) && Context.isNONTRANSContext(method.getResolvedContext())) {
+        VelodromeBaselineInstr.insertInstrumentationAtTransactionEnd(method, biStart, asm, octetBaselineInstr, method.getId());
+      }
+    }
+
     asm.emitPOP_Reg(T0);
     genEpilogue(WORDSIZE, WORDSIZE);
   }
@@ -2209,6 +2578,14 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
   @Override
   protected final void emit_return() {
     if (method.isSynchronized()) genMonitorExit();
+
+    // Velodrome: Insert instrumentation at method return
+    if (Octet.shouldInstrumentMethod(method) && (Velodrome.methodsAsTransactions() || method.isSynchronized() && Velodrome.syncBlocksAsTransactions())) {
+      if (Context.isTRANSContext(method.getStaticContext()) && Context.isNONTRANSContext(method.getResolvedContext())) {
+        VelodromeBaselineInstr.insertInstrumentationAtTransactionEnd(method, biStart, asm, octetBaselineInstr, method.getId());
+      }
+    }
+
     genEpilogue(0, 0);
   }
 
@@ -2219,6 +2596,10 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
   @Override
   protected final void emit_unresolved_getstatic(FieldReference fieldRef) {
     emitDynamicLinkingSequence(asm, T0, fieldRef, true);
+
+    // Octet: insert barrier
+    octetBaselineInstr.insertStaticBarrierUnresolved(method, biStart, true, T0, fieldRef, asm);
+
     if (NEEDS_OBJECT_GETSTATIC_BARRIER && !fieldRef.getFieldContentsType().isPrimitiveType()) {
       Barriers.compileGetstaticBarrier(asm, T0, fieldRef.getId());
       return;
@@ -2243,14 +2624,31 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
         asm.emitPUSH_RegOff(T0, Assembler.BYTE, Magic.getTocPointer().toWord().toOffset());
       }
     }
+
+    // Velodrome: Inserting instrumentation to release metadata lock
+    // T0 seems to have the offset
+    if (Velodrome.insertPostBarriers()) {
+      VelodromeBaselineInstr.insertInstrumentationToUnlockMetadataForStaticUnresolved(method, biStart, true, fieldRef, asm);
+    }
+
   }
 
   @Override
   protected final void emit_resolved_getstatic(FieldReference fieldRef) {
     RVMField field = fieldRef.peekResolvedField();
     Offset fieldOffset = field.getOffset();
+
+    // Octet: insert barrier
+    octetBaselineInstr.insertStaticBarrierResolved(method, biStart, true, field, asm);
+
     if (NEEDS_OBJECT_GETSTATIC_BARRIER && !fieldRef.getFieldContentsType().isPrimitiveType() && !field.isUntraced()) {
       Barriers.compileGetstaticBarrierImm(asm, fieldOffset, fieldRef.getId());
+
+      // Velodrome: Inserting instrumentation to release metadata lock before returning
+      if (Velodrome.insertPostBarriers()) {
+        VelodromeBaselineInstr.insertInstrumentationToUnlockMetadataForStaticResolved(method, biStart, true, field, asm);
+      }
+
       return;
     }
     if (fieldRef.getSize() <= BYTES_IN_INT) { // field is one word
@@ -2272,11 +2670,22 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
         asm.emitPUSH_Abs(Magic.getTocPointer().plus(fieldOffset));
       }
     }
+
+    // Velodrome: Inserting instrumentation to release metadata lock
+    // T0 seems to have the offset
+    if (Velodrome.insertPostBarriers()) {
+      VelodromeBaselineInstr.insertInstrumentationToUnlockMetadataForStaticResolved(method, biStart, true, field, asm);
+    }
+
   }
 
   @Override
   protected final void emit_unresolved_putstatic(FieldReference fieldRef) {
     emitDynamicLinkingSequence(asm, T0, fieldRef, true);
+
+    // Octet: insert barrier
+    octetBaselineInstr.insertStaticBarrierUnresolved(method, biStart, false, T0, fieldRef, asm);
+
     if (NEEDS_OBJECT_PUTSTATIC_BARRIER && fieldRef.getFieldContentsType().isReferenceType()) {
       Barriers.compilePutstaticBarrier(asm, T0, fieldRef.getId());
     } else {
@@ -2300,6 +2709,13 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
         }
       }
     }
+    
+    // Velodrome: Inserting instrumentation to release metadata lock
+    // T0 seems to have the offset
+    if (Velodrome.insertPostBarriers()) {
+      VelodromeBaselineInstr.insertInstrumentationToUnlockMetadataForStaticUnresolved(method, biStart, false, fieldRef, asm);
+    }
+    
     // The field may be volatile
     asm.emitMFENCE();
   }
@@ -2308,6 +2724,10 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
   protected final void emit_resolved_putstatic(FieldReference fieldRef) {
     RVMField field = fieldRef.peekResolvedField();
     Offset fieldOffset = field.getOffset();
+
+    // Octet: insert barrier
+    octetBaselineInstr.insertStaticBarrierResolved(method, biStart, false, field, asm);
+
     if (NEEDS_OBJECT_PUTSTATIC_BARRIER && field.isReferenceType() && !field.isUntraced()) {
       Barriers.compilePutstaticBarrierImm(asm, fieldOffset, fieldRef.getId());
     } else {
@@ -2331,6 +2751,12 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
         }
       }
     }
+    
+    // Velodrome: Inserting instrumentation to release metadata lock
+    if (Velodrome.insertPostBarriers()) {
+      VelodromeBaselineInstr.insertInstrumentationToUnlockMetadataForStaticResolved(method, biStart, false, field, asm);
+    }
+    
     if (field.isVolatile()) {
       asm.emitMFENCE();
     }
@@ -2340,10 +2766,30 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
   protected final void emit_unresolved_getfield(FieldReference fieldRef) {
     TypeReference fieldType = fieldRef.getFieldContentsType();
     emitDynamicLinkingSequence(asm, T0, fieldRef, true);
+
+    // Octet: insert barrier
+    octetBaselineInstr.insertFieldBarrierUnresolved(method, biStart, true, NO_SLOT, T0, fieldRef, asm);
+    // Velodrome: Track whether the code generation flow goes into the else part
+    boolean is64BitLoad = false;
+
     if (fieldType.isReferenceType()) {
       // 32/64bit reference load
       if (NEEDS_OBJECT_GETFIELD_BARRIER) {
+
+        // Velodrome: Save the object reference on stack
+        if (Velodrome.insertPostBarriers()) {
+          asm.emitPUSH_RegInd(SP);
+        }
+
         Barriers.compileGetfieldBarrier(asm, T0, fieldRef.getId());
+
+        // Velodrome: Restore the object reference to S0
+        if (Velodrome.insertPostBarriers()) {
+          asm.emitPOP_Reg(T1);
+          asm.emitPOP_Reg(S0);
+          asm.emitPUSH_Reg(T1);
+        }
+
       } else {
         asm.emitPOP_Reg(S0);                                  // S0 is object reference
         asm.emitPUSH_RegIdx(S0, T0, Assembler.BYTE, NO_SLOT); // place field value on stack
@@ -2380,6 +2826,12 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
                    (VM.BuildFor64Addr && fieldType.isWordLikeType()));
       }
       asm.emitPOP_Reg(T1);           // T1 is object reference
+
+      // Velodrome: Make a backup of the object reference
+      if (Velodrome.insertPostBarriers()) {
+        is64BitLoad = true;
+      }
+
       if (VM.BuildFor32Addr) {
         // NB this is a 64bit copy from memory to the stack so implement
         // as a slightly optimized Intel memory copy using the FPU
@@ -2398,6 +2850,18 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
         asm.emitPUSH_RegIdx(T1, T0, Assembler.BYTE, NO_SLOT); // place value on stack
       }
     }
+
+    // Velodrome: Inserting instrumentation to release metadata lock
+    if (Velodrome.insertPostBarriers()) {
+      GPR reg = S0;
+      if (fieldType.isReferenceType() && NEEDS_OBJECT_GETFIELD_BARRIER) {
+        reg = S0; // The register containing object reference is changed
+      } else if (is64BitLoad) { // 64 bit load case
+        reg = T1;
+      }
+      VelodromeBaselineInstr.insertPostBarrierForUnresolvedGetfield(method, biStart, asm, fieldRef, reg);
+    }
+    
   }
 
   @Override
@@ -2405,10 +2869,30 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
     TypeReference fieldType = fieldRef.getFieldContentsType();
     RVMField field = fieldRef.peekResolvedField();
     Offset fieldOffset = field.getOffset();
+
+    // Octet: insert barrier
+    octetBaselineInstr.insertFieldBarrierResolved(method, biStart, true, NO_SLOT, field, asm);
+    // Velodrome: Track whether the code generation flow goes into the 64-bit else part
+    boolean is64BitLoad = false;
+
     if (field.isReferenceType()) {
       // 32/64bit reference load
       if (NEEDS_OBJECT_GETFIELD_BARRIER && !field.isUntraced()) {
+
+        // Velodrome: Save the object reference on stack
+        if (Velodrome.insertPostBarriers()) {
+          asm.emitPUSH_RegInd(SP);
+        }
+
         Barriers.compileGetfieldBarrierImm(asm, fieldOffset, fieldRef.getId());
+
+        // Velodrome: Restore the object reference to T0
+        if (Velodrome.insertPostBarriers()) {
+          asm.emitPOP_Reg(T1);
+          asm.emitPOP_Reg(T0);
+          asm.emitPUSH_Reg(T1);
+        }
+
       } else {
         asm.emitPOP_Reg(T0);                   // T0 is object reference
         asm.emitPUSH_RegDisp(T0, fieldOffset); // place field value on stack
@@ -2446,6 +2930,12 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
                    (VM.BuildFor64Addr && fieldType.isWordLikeType()));
       }
       asm.emitPOP_Reg(T0); // T0 is object reference
+
+      // Velodrome: Make a backup of the object reference
+      if (Velodrome.insertPostBarriers()) {
+        is64BitLoad = true;
+      }
+
       if (VM.BuildFor32Addr) {
         // NB this is a 64bit copy from memory to the stack so implement
         // as a slightly optimized Intel memory copy using the FPU
@@ -2464,6 +2954,16 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
         asm.emitPUSH_RegDisp(T0, fieldOffset); // place value on stack
       }
     }
+
+    // Velodrome: Inserting instrumentation to release metadata lock
+    if (Velodrome.insertPostBarriers()) {
+      GPR reg = S0; // Handles most cases
+      if (field.isReferenceType() || is64BitLoad) { // The register containing object reference is changed
+        reg = T0;
+      }
+      VelodromeBaselineInstr.insertPostBarrierForResolvedGetfield(method, biStart, asm, field, reg);
+    }
+
   }
 
   @Override
@@ -2471,6 +2971,25 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
     Barriers.compileModifyCheck(asm, fieldRef.getNumberOfStackSlots() * WORDSIZE);
     TypeReference fieldType = fieldRef.getFieldContentsType();
     emitDynamicLinkingSequence(asm, T0, fieldRef, true);
+
+		// Velodrome: Take a backup of the object reference
+    if (Velodrome.insertPostBarriers() && OctetBaselineInstr.shouldInstrument(method, biStart)) {
+      // Test whether we would ever require copying 3 or more stack slots
+      if (VM.VerifyAssertions) { VM._assert(fieldRef.getNumberOfStackSlots() <= 2); }
+      asm.emitPOP_Reg(S0); // S0 now has the value to be stored (first word)
+      if (fieldRef.getNumberOfStackSlots() == 2) {
+        asm.emitPOP_Reg(S1); // S1 now has the second word to be stored
+      }
+      asm.emitPUSH_RegDisp(SP, NO_SLOT); // Duplicate the object reference
+      if (fieldRef.getNumberOfStackSlots() == 2) {
+        asm.emitPUSH_Reg(S1); // Now copy the value back the second word on to the stack
+      }
+      asm.emitPUSH_Reg(S0); // Now copy the value (first word) back on to the stack
+    }
+
+    // Octet: insert barrier
+    octetBaselineInstr.insertFieldBarrierUnresolved(method, biStart, false, NO_SLOT.plus(fieldRef.getNumberOfStackSlots() * WORDSIZE), T0, fieldRef, asm);
+
     if (fieldType.isReferenceType()) {
       // 32/64bit reference store
       if (NEEDS_OBJECT_PUTFIELD_BARRIER) {
@@ -2557,6 +3076,12 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
     }
     // The field may be volatile.
     asm.emitMFENCE();
+
+    // Velodrome: Inserting instrumentation to release metadata lock
+    if (Velodrome.insertPostBarriers()) {
+      VelodromeBaselineInstr.insertPostBarrierForUnresolvedPutfield(method, biStart, asm, fieldRef);
+    }
+    
   }
 
   @Override
@@ -2565,6 +3090,25 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
     RVMField field = fieldRef.peekResolvedField();
     TypeReference fieldType = fieldRef.getFieldContentsType();
     Offset fieldOffset = field.getOffset();
+
+    // Velodrome: Take a backup of the object reference
+    if (Velodrome.insertPostBarriers() && OctetBaselineInstr.shouldInstrument(method, biStart) && !field.isFinal()) {
+      // Test whether we would ever require copying 3 or more stack slots
+      if (VM.VerifyAssertions) { VM._assert(fieldRef.getNumberOfStackSlots() <= 2); }
+      asm.emitPOP_Reg(T0); // T0 now has the value to be stored (first word)
+      if (fieldRef.getNumberOfStackSlots() == 2) {
+        asm.emitPOP_Reg(T1); // T1 now has the second word to be stored
+      }
+      asm.emitPUSH_RegDisp(SP, NO_SLOT); // Duplicate the object reference
+      if (fieldRef.getNumberOfStackSlots() == 2) {
+        asm.emitPUSH_Reg(T1); // Now copy the value back the second word on to the stack
+      }
+      asm.emitPUSH_Reg(T0); // Now copy the value (first word) back on to the stack
+    }
+        
+    // Octet: insert barrier
+    octetBaselineInstr.insertFieldBarrierResolved(method, biStart, false, NO_SLOT.plus(fieldRef.getNumberOfStackSlots() * WORDSIZE), field, asm);
+
     if (field.isReferenceType()) {
       // 32/64bit reference store
       if (NEEDS_OBJECT_PUTFIELD_BARRIER && !field.isUntraced()) {
@@ -2650,15 +3194,24 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
     if (field.isVolatile()) {
       asm.emitMFENCE();
     }
+    
+    // Velodrome: Inserting instrumentation to release metadata lock
+    if (Velodrome.insertPostBarriers()) {
+      VelodromeBaselineInstr.insertPostBarrierForResolvedPutfield(method, biStart, asm, field);
+    }
+
   }
 
   /*
    * method invocation
    */
 
+  // Octet: Static cloning: In various invoke cases, support multiple resolved methods for every method reference.
+
+  // Velodrome: Context: Added a pre-computed context
   @Override
-  protected final void emit_unresolved_invokevirtual(MethodReference methodRef) {
-    emitDynamicLinkingSequence(asm, T0, methodRef, true);            // T0 has offset of method
+  protected final void emit_unresolved_invokevirtual(MethodReference methodRef, int context) {
+    emitDynamicLinkingSequence(asm, T0, methodRef, true, /*method.getStaticContext()*/ context);            // T0 has offset of method
     int methodRefparameterWords = methodRef.getParameterWords() + 1; // +1 for "this" parameter
     Offset objectOffset =
       Offset.fromIntZeroExtend(methodRefparameterWords << LG_WORDSIZE).minus(WORDSIZE); // object offset into stack
@@ -2670,10 +3223,11 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
     genResultRegisterUnload(methodRef);                              // push return value, if any
   }
 
+  // Velodrome: Context: Added a pre-computed context
   @Override
-  protected final void emit_resolved_invokevirtual(MethodReference methodRef) {
+  protected final void emit_resolved_invokevirtual(MethodReference methodRef, int context) {
     int methodRefparameterWords = methodRef.getParameterWords() + 1; // +1 for "this" parameter
-    Offset methodRefOffset = methodRef.peekResolvedMethod().getOffset();
+    Offset methodRefOffset = methodRef.peekResolvedMethod(context).getOffset();
     Offset objectOffset =
       Offset.fromIntZeroExtend(methodRefparameterWords << LG_WORDSIZE).minus(WORDSIZE); // object offset into stack
     stackMoveHelper(T1, objectOffset);                               // T1 has "this" parameter
@@ -2704,9 +3258,10 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
     }
   }
 
+  // Velodrome: Context: Added a pre-computed context
   @Override
-  protected final void emit_unresolved_invokespecial(MethodReference methodRef) {
-    emitDynamicLinkingSequence(asm, S0, methodRef, true);
+  protected final void emit_unresolved_invokespecial(MethodReference methodRef, int context) {
+    emitDynamicLinkingSequence(asm, S0, methodRef, true, /*method.getStaticContext()*/ context);
     genParameterRegisterLoad(methodRef, true);
     asm.emitCALL_RegDisp(S0, Magic.getTocPointer().toWord().toOffset());
     genResultRegisterUnload(methodRef);
@@ -2714,15 +3269,16 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
 
   @Override
   protected final void emit_unresolved_invokestatic(MethodReference methodRef) {
-    emitDynamicLinkingSequence(asm, S0, methodRef, true);
+    emitDynamicLinkingSequence(asm, S0, methodRef, true, method.getStaticContext());
     genParameterRegisterLoad(methodRef, false);
     asm.emitCALL_RegDisp(S0, Magic.getTocPointer().toWord().toOffset());
     genResultRegisterUnload(methodRef);
   }
 
+  // Velodrome: Context: Added a pre-computed context
   @Override
-  protected final void emit_resolved_invokestatic(MethodReference methodRef) {
-    Offset methodOffset = methodRef.peekResolvedMethod().getOffset();
+  protected final void emit_resolved_invokestatic(MethodReference methodRef, int context) {
+    Offset methodOffset = methodRef.peekResolvedMethod(context).getOffset();
     genParameterRegisterLoad(methodRef, false);
     asm.emitCALL_Abs(Magic.getTocPointer().plus(methodOffset));
     genResultRegisterUnload(methodRef);
@@ -2733,7 +3289,7 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
     final int count = methodRef.getParameterWords() + 1; // +1 for "this" parameter
 
     RVMMethod resolvedMethod = null;
-    resolvedMethod = methodRef.peekInterfaceMethod();
+    resolvedMethod = methodRef.peekInterfaceMethod(method.getStaticContext());
 
     // (1) Emit dynamic type checking sequence if required to do so inline.
     if (VM.BuildForIMTInterfaceInvocation) {
@@ -2750,7 +3306,8 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
           stackMoveHelper(T1, Offset.fromIntZeroExtend((count - 1) << LG_WORDSIZE));
           asm.emitPUSH_Imm(methodRef.getId()); // push dict id of target
           asm.emitPUSH_Reg(T1);                // push "this"
-          genParameterRegisterLoad(asm, 2);    // pass 2 parameter word
+          asm.emitPUSH_Imm(method.getStaticContext());
+          genParameterRegisterLoad(asm, 3);    // pass 3 parameter word
           // check that "this" class implements the interface
           asm.emitCALL_Abs(Magic.getTocPointer().plus(Entrypoints.unresolvedInvokeinterfaceImplementsTestMethod.getOffset()));
         } else {
@@ -2795,7 +3352,14 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
 
     // (2) Emit interface invocation sequence.
     if (VM.BuildForIMTInterfaceInvocation) {
-      InterfaceMethodSignature sig = InterfaceMethodSignature.findOrCreate(methodRef);
+
+      // Velodrome: Context: Interface invocation for non-application methods can only have VM_CONTEXT
+      int context = method.getStaticContext();
+      if (!Context.isApplicationPrefix(methodRef.getType())) {
+        context = Context.VM_CONTEXT;
+      }
+
+      InterfaceMethodSignature sig = InterfaceMethodSignature.findOrCreate(methodRef, context);
 
       // squirrel away signature ID
       ThreadLocalState.emitMoveImmToField(asm, ArchEntrypoints.hiddenSignatureIdField.getOffset(), sig.getId());
@@ -2817,7 +3381,8 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
         itableIndex =
           InterfaceInvocation.getITableIndex(resolvedMethod.getDeclaringClass(),
                                              methodRef.getName(),
-                                             methodRef.getDescriptor());
+                                             methodRef.getDescriptor(),
+                                             resolvedMethod.getResolvedContext());
       }
       if (itableIndex == -1) {
         // itable index is not known at compile-time.
@@ -2831,7 +3396,8 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
           asm.emitPUSH_RegDisp(SP, Offset.fromIntZeroExtend((count - 1) << LG_WORDSIZE));
         }
         asm.emitPUSH_Imm(methodRefId);             // id of method to call
-        genParameterRegisterLoad(asm, 2);          // pass 2 parameter words
+        asm.emitPUSH_Imm(method.getStaticContext());
+        genParameterRegisterLoad(asm, 3);          // pass 3 parameter words
         // invokeinterface(obj, id) returns address to call
         asm.emitCALL_Abs(Magic.getTocPointer().plus(Entrypoints.invokeInterfaceMethod.getOffset()));
         if (VM.BuildFor32Addr) {
@@ -3226,6 +3792,14 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
 
   @Override
   protected final void emit_monitorenter() {
+    
+    // Velodrome: Instrumentation at the beginning of transaction/synchronized block    
+    // We can have a configuration where both methods and sync blocks are enabled
+    if (Octet.shouldInstrumentMethod(method) && Velodrome.syncBlocksAsTransactions()) {
+      if (VM.VerifyAssertions) { VM._assert(NOT_REACHED); }
+      VelodromeBaselineInstr.insertInstrumentationAtTransactionBegin(method, biStart, asm, octetBaselineInstr, method.getId());
+    }   
+    
     if (VM.BuildFor32Addr) {
       asm.emitMOV_Reg_RegInd(T0, SP);      // T0 is object reference
     } else {
@@ -3233,13 +3807,31 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
     }
     genNullCheck(asm, T0);
     genParameterRegisterLoad(asm, 1);      // pass 1 parameter word
-    asm.emitCALL_Abs(Magic.getTocPointer().plus(Entrypoints.lockMethod.getOffset()));
+    // Velodrome: Decide which lock method to use
+    if (Octet.shouldInstrumentMethod(method)) {
+      asm.emitCALL_Abs(Magic.getTocPointer().plus(Entrypoints.lockMethodWithInstrumentation.getOffset()));
+    } else {
+      asm.emitCALL_Abs(Magic.getTocPointer().plus(Entrypoints.lockMethodWithoutInstrumentation.getOffset()));
+    }
   }
 
   @Override
   protected final void emit_monitorexit() {
     genParameterRegisterLoad(asm, 1);          // pass 1 parameter word
-    asm.emitCALL_Abs(Magic.getTocPointer().plus(Entrypoints.unlockMethod.getOffset()));
+    // Velodrome: Decide which unlock method to use
+    if (Octet.shouldInstrumentMethod(method)) {
+      asm.emitCALL_Abs(Magic.getTocPointer().plus(Entrypoints.unlockMethodWithInstrumentation.getOffset()));
+    } else {
+      asm.emitCALL_Abs(Magic.getTocPointer().plus(Entrypoints.unlockMethodWithoutInstrumentation.getOffset()));
+    }
+
+    // Velodrome: Instrumentation at the end of transaction/synchronized block  
+    // We can have a configuration where both methods and sync blocks are enabled
+    if (Octet.shouldInstrumentMethod(method) && Velodrome.syncBlocksAsTransactions()) {      
+      if (VM.VerifyAssertions) { VM._assert(NOT_REACHED); }
+      VelodromeBaselineInstr.insertInstrumentationAtTransactionEnd(method, biStart, asm, octetBaselineInstr, method.getId());      
+    }
+    
   }
 
   //----------------//
@@ -3348,7 +3940,8 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
       /*
        * generate stacklimit check
        */
-      if (isInterruptible) {
+      // Velodrome: Stack overflow: Insert stack overflow checks for all uninterruptible methods if assertions are turned on
+      if (VM.VerifyAssertions || isInterruptible) { 
         // S0<-limit
         if (VM.BuildFor32Addr) {
           asm.emitCMP_Reg_RegDisp(SP, TR, Entrypoints.stackLimitField.getOffset());
@@ -3383,6 +3976,25 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
       if (method.isSynchronized()) genMonitorEnter();
 
       genThreadSwitchTest(RVMThread.PROLOGUE);
+
+      // Octet: Static cloning: Debugging for supporting multiple resolved methods for every method reference.
+      if (Context.DEBUG && Context.isLibraryPrefix(method.getDeclaringClass().getTypeRef())) {
+        //genParameterRegisterLoad(asm, 1);
+        asm.emitCALL_Abs(Magic.getTocPointer().plus(Entrypoints.checkLibraryContextMethod.getOffset()));
+      }
+
+      // Velodrome: Instrumentation at the beginning of a method/transaction
+      // Instrument only if the static context of the current method is TRANS, while the resolved context is NON_TRANS
+      if (Octet.shouldInstrumentMethod(method) && (Velodrome.methodsAsTransactions() || method.isSynchronized() && Velodrome.syncBlocksAsTransactions())) {
+        if (Context.isTRANSContext(method.getStaticContext()) && Context.isNONTRANSContext(method.getResolvedContext())) {
+          VelodromeBaselineInstr.insertInstrumentationAtTransactionBegin(method, biStart, asm, octetBaselineInstr, method.getId());
+        }
+        // Insert debug method at all prologs
+        if (Velodrome.checkMethodContextAtProlog() && Context.isApplicationPrefix(method.getDeclaringClass().getTypeRef())) {
+          asm.emitCALL_Abs(Magic.getTocPointer().plus(Entrypoints.velodromeCheckMethodContextAtPrologMethod.getOffset()));
+        }
+      }
+      
     }
   }
 
@@ -3394,7 +4006,8 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
 
     if (VM.VerifyAssertions) VM._assert(method.isForOsrSpecialization());
 
-    if (isInterruptible) {
+    // Velodrome: Stack overflow: Insert stack overflow checks for all uninterruptible methods if assertions are turned on
+    if (VM.VerifyAssertions || isInterruptible) { 
       // S0<-limit
       ThreadLocalState.emitMoveFieldToReg(asm, S0, Entrypoints.stackLimitField.getOffset());
       if (VM.BuildFor32Addr) {
@@ -3474,7 +4087,12 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
     }
     // pass 1 parameter
     genParameterRegisterLoad(asm, 1);
-    asm.emitCALL_Abs(Magic.getTocPointer().plus(Entrypoints.lockMethod.getOffset()));
+    // Velodrome: Decide which lock method to use
+    if (Octet.shouldInstrumentMethod(method)) {
+      asm.emitCALL_Abs(Magic.getTocPointer().plus(Entrypoints.lockMethodWithInstrumentation.getOffset()));
+    } else {
+      asm.emitCALL_Abs(Magic.getTocPointer().plus(Entrypoints.lockMethodWithoutInstrumentation.getOffset()));
+    }
     // after this instruction, the method has the monitor
     lockOffset = asm.getMachineCodeIndex();
   }
@@ -3491,7 +4109,12 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
       asm.emitPUSH_RegDisp(ESP, localOffset(0));                    // push "this" object
     }
     genParameterRegisterLoad(asm, 1); // pass 1 parameter
-    asm.emitCALL_Abs(Magic.getTocPointer().plus(Entrypoints.unlockMethod.getOffset()));
+    // Velodrome: Decide which unlock method to use
+    if (Octet.shouldInstrumentMethod(method)) {
+      asm.emitCALL_Abs(Magic.getTocPointer().plus(Entrypoints.unlockMethodWithInstrumentation.getOffset()));
+    } else {
+      asm.emitCALL_Abs(Magic.getTocPointer().plus(Entrypoints.unlockMethodWithoutInstrumentation.getOffset()));
+    }
   }
 
   /**
@@ -4160,6 +4783,12 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
     return offset.plus(offsetToFrameHead);
   }
 
+  /** Octet: Static cloning: Added this helper method to help with fields, which don't need a context. */
+  static void emitDynamicLinkingSequence(Assembler asm, GPR reg, MemberReference ref, boolean couldBeZero) {
+    if (VM.VerifyAssertions) { VM._assert(ref.isFieldReference()); }
+    emitDynamicLinkingSequence(asm, reg, ref, couldBeZero, Context.VM_CONTEXT);
+  }
+
   /**
    * Emit dynamic linking sequence placing the offset of the given member in reg
    * @param asm assembler to generate code into
@@ -4167,10 +4796,11 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
    * @param ref method reference to be resolved
    * @param couldBeZero could the value in the offsets table require resolving
    */
-  static void emitDynamicLinkingSequence(Assembler asm, GPR reg, MemberReference ref, boolean couldBeZero) {
+  // Octet: Static cloning: Support multiple resolved methods for every method reference.
+  static void emitDynamicLinkingSequence(Assembler asm, GPR reg, MemberReference ref, boolean couldBeZero, int context) {
     int memberId = ref.getId();
     Offset memberOffset = Offset.fromIntZeroExtend(memberId << 2);
-    Offset tableOffset = Entrypoints.memberOffsetsField.getOffset();
+    Offset tableOffset = Entrypoints.memberOffsetsFields[context].getOffset();
     if (couldBeZero) {
       int retryLabel = asm.getMachineCodeIndex();            // branch here after dynamic class loading
       if (VM.BuildFor32Addr) {
@@ -4186,7 +4816,8 @@ public abstract class BaselineCompilerImpl extends BaselineCompiler implements B
       }
       ForwardReference fr = asm.forwardJcc(Assembler.NE);       // if so, skip call instructions
       asm.emitPUSH_Imm(memberId);                            // pass member's dictId
-      genParameterRegisterLoad(asm, 1);                           // pass 1 parameter word
+      asm.emitPUSH_Imm(context);
+      genParameterRegisterLoad(asm, 2);                           // pass 2 parameter word
       Offset resolverOffset = Entrypoints.resolveMemberMethod.getOffset();
       asm.emitCALL_Abs(Magic.getTocPointer().plus(resolverOffset)); // does class loading as sideffect
       asm.emitJMP_Imm(retryLabel);                           // reload reg with valid value

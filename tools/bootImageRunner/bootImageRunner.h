@@ -81,6 +81,9 @@ unsigned int parse_memory_size(
 
 extern int verboseBoot;
 
+// Velodrome: Adding a non-standard argument to identify benchmark category
+extern int benchmarkCategory;
+
 /* define in sys.c, used in libvm.c */
 extern void sysInitialize();
 

@@ -12,6 +12,9 @@
  */
 package java.lang;
 
+import static org.jikesrvm.ia32.StackframeLayoutConstants.INVISIBLE_METHOD_ID;
+import static org.jikesrvm.ia32.StackframeLayoutConstants.STACKFRAME_SENTINEL_FP;
+
 import java.io.InputStream;
 import java.io.Serializable;
 import java.lang.annotation.Annotation;
@@ -37,20 +40,27 @@ import java.util.ArrayList;
 
 import org.jikesrvm.Callbacks;
 import org.jikesrvm.UnimplementedError;
+import org.jikesrvm.VM;
 import org.jikesrvm.classloader.Atom;
 import org.jikesrvm.classloader.BootstrapClassLoader;
+import org.jikesrvm.classloader.Context;
 import org.jikesrvm.classloader.RVMClass;
 import org.jikesrvm.classloader.RVMClassLoader;
 import org.jikesrvm.classloader.RVMField;
 import org.jikesrvm.classloader.RVMMethod;
 import org.jikesrvm.classloader.RVMType;
 import org.jikesrvm.classloader.TypeReference;
+import org.jikesrvm.compilers.common.CompiledMethod;
+import org.jikesrvm.compilers.common.CompiledMethods;
+import org.jikesrvm.octet.Octet;
+import org.jikesrvm.runtime.Magic;
 import org.jikesrvm.runtime.Reflection;
 import org.jikesrvm.runtime.RuntimeEntrypoints;
 import org.jikesrvm.runtime.StackBrowser;
 import org.vmmagic.pragma.Inline;
 import org.vmmagic.pragma.NoInline;
 import org.vmmagic.pragma.Pure;
+import org.vmmagic.unboxed.Address;
 
 /**
  * Implementation of java.lang.Class for JikesRVM.
@@ -699,6 +709,26 @@ public final class Class<T> implements Serializable, Type, AnnotatedElement, Gen
     }
     return this.defaultConstructor;
   }
+  
+  // Velodrome: Context: Helper method to search for default ctor with given "context". We cannot cache the default
+  // constructor in "this.defaultConstructor" since the resolved contexts could be different in different scenarios.
+  @Pure
+  private RVMMethod getDefaultConstructor(RVMClass cls, int context) {
+    if (VM.VerifyAssertions) { VM._assert(Context.isApplicationPrefix(cls.getTypeRef())); }
+    if (VM.VerifyAssertions) { VM._assert(this.defaultConstructor == null); } 
+    RVMMethod defaultConstructor = null;
+    RVMMethod[] methods = type.asClass().getConstructorMethods();
+    for (RVMMethod method : methods) {
+      if (method.getParameterTypes().length == 0) {
+        if (method.getResolvedContext() == context) {
+          defaultConstructor = method;
+          break;
+        }
+      }
+    }
+    if (VM.VerifyAssertions) { VM._assert(defaultConstructor != null); }
+    return defaultConstructor;
+  }
 
   public Constructor<T> getConstructor(Class<?>... parameterTypes) throws NoSuchMethodException, SecurityException {
     checkMemberAccess(Member.PUBLIC);
@@ -858,7 +888,33 @@ public final class Class<T> implements Serializable, Type, AnnotatedElement, Gen
     }
 
     // Find the defaultConstructor
-    RVMMethod defaultConstructor = getDefaultConstructor();
+    // Velodrome: Context: The call here can come from a library method, so basically we will walk up the stack to find
+    // out which RVMMethod version of <init> to use depending on the computed context. We can't blindly use the 
+    // static context of the caller. We will do this exercise only for application methods.
+    RVMMethod defaultConstructor;
+    if (Context.isApplicationPrefix(cls.getTypeRef())) {
+      Address fp = Magic.getFramePointer();
+      int context = Context.TRANS_CONTEXT;
+      fp = Magic.getCallerFramePointer(fp);
+      // Search till the topmost application frame/method
+      while (Magic.getCallerFramePointer(fp).NE(STACKFRAME_SENTINEL_FP)) {
+        int compiledMethodId = Magic.getCompiledMethodID(fp);
+        if (compiledMethodId != INVISIBLE_METHOD_ID) {
+          CompiledMethod compiledMethod = CompiledMethods.getCompiledMethod(compiledMethodId);
+          RVMMethod method = compiledMethod.getMethod();
+          if (!method.isNative() && Octet.shouldInstrumentMethod(method)) {
+            context = method.getStaticContext();
+            break;
+          }
+        }
+        fp = Magic.getCallerFramePointer(fp);
+      }
+      defaultConstructor = getDefaultConstructor(cls, context);
+      if (VM.VerifyAssertions) { VM._assert(context == defaultConstructor.getResolvedContext()); }
+    } else {
+      defaultConstructor = getDefaultConstructor();
+    }
+       
     if (defaultConstructor == null)
       throw new InstantiationException();
 

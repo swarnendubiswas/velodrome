@@ -14,8 +14,8 @@ package org.jikesrvm.classloader;
 
 import org.jikesrvm.ArchitectureSpecific.CodeArray;
 import org.jikesrvm.ArchitectureSpecific.InterfaceMethodConflictResolver;
-import org.jikesrvm.VM;
 import org.jikesrvm.SizeConstants;
+import org.jikesrvm.VM;
 import org.jikesrvm.mm.mminterface.MemoryManager;
 import org.jikesrvm.objectmodel.IMT;
 import org.jikesrvm.objectmodel.ITable;
@@ -55,20 +55,21 @@ public class InterfaceInvocation implements TIBLayoutConstants, SizeConstants {
    * @param mid id of the MemberReference for the target interface method.
    * @return machine code corresponding to desired interface method
    */
+  // Octet: Static cloning: Support multiple resolved methods for every method reference.
   @Entrypoint
-  public static CodeArray invokeInterface(Object target, int mid) throws IncompatibleClassChangeError {
+  public static CodeArray invokeInterface(Object target, int mid, int context) throws IncompatibleClassChangeError {
 
     MethodReference mref = MemberReference.getMemberRef(mid).asMethodReference();
-    RVMMethod sought = mref.resolveInterfaceMethod();
+    RVMMethod sought = mref.resolveInterfaceMethod(context);
     RVMClass I = sought.getDeclaringClass();
     RVMClass C = Magic.getObjectType(target).asClass();
     if (VM.BuildForITableInterfaceInvocation) {
       TIB tib = C.getTypeInformationBlock();
       ITable iTable = findITable(tib, I.getInterfaceId());
-      return iTable.getCode(getITableIndex(I, mref.getName(), mref.getDescriptor()));
+      return iTable.getCode(getITableIndex(I, mref.getName(), mref.getDescriptor(), context));
     } else {
       if (!RuntimeEntrypoints.isAssignableWith(I, C)) throw new IncompatibleClassChangeError();
-      RVMMethod found = C.findVirtualMethod(sought.getName(), sought.getDescriptor());
+      RVMMethod found = C.findVirtualMethod(sought.getName(), sought.getDescriptor(), context);
       if (found == null) throw new IncompatibleClassChangeError();
       return found.getCurrentEntryCodeArray();
     }
@@ -131,10 +132,11 @@ public class InterfaceInvocation implements TIBLayoutConstants, SizeConstants {
    * @param mid     Dictionary id of the {@link MemberReference} for the target interface method.
    * @param rhsObject  The object on which we are attempting to invoke the interface method
    */
+  // Octet: Static cloning: Support multiple resolved methods for every method reference.
   @Entrypoint
-  public static void unresolvedInvokeinterfaceImplementsTest(int mid, Object rhsObject)
+  public static void unresolvedInvokeinterfaceImplementsTest(int mid, Object rhsObject, int context)
       throws IncompatibleClassChangeError {
-    RVMMethod sought = MemberReference.getMemberRef(mid).asMethodReference().resolveInterfaceMethod();
+    RVMMethod sought = MemberReference.getMemberRef(mid).asMethodReference().resolveInterfaceMethod(context);
     RVMClass LHSclass = sought.getDeclaringClass();
     if (!LHSclass.isResolved()) {
       LHSclass.resolve();
@@ -195,8 +197,9 @@ public class InterfaceInvocation implements TIBLayoutConstants, SizeConstants {
       for (RVMMethod im : interfaceMethods) {
         if (im.isClassInitializer()) continue;
         if (VM.VerifyAssertions) VM._assert(im.isPublic() && im.isAbstract());
-        InterfaceMethodSignature sig = InterfaceMethodSignature.findOrCreate(im.getMemberRef());
-        RVMMethod vm = klass.findVirtualMethod(im.getName(), im.getDescriptor());
+        // Octet: Static cloning: Support multiple resolved methods for every method reference.
+        InterfaceMethodSignature sig = InterfaceMethodSignature.findOrCreate(im.getMemberRef(), im.getResolvedContext());
+        RVMMethod vm = klass.findVirtualMethod(im.getName(), im.getDescriptor(), im.getResolvedContext());
         // NOTE: if there is some error condition, then we are playing a dirty trick and
         //       pretending that a static method of RuntimeEntrypoints is a virtual method.
         //       Since the methods in question take no arguments, we can get away with this.
@@ -257,6 +260,7 @@ public class InterfaceInvocation implements TIBLayoutConstants, SizeConstants {
   /**
    * Build a single ITable for the pair of class C and interface I
    */
+  // Octet: Static cloning: Support multiple resolved methods for every method reference.
   private static ITable buildITable(RVMClass C, RVMClass I) {
     RVMMethod[] interfaceMethods = I.getDeclaredMethods();
     TIB tib = C.getTypeInformationBlock();
@@ -265,7 +269,7 @@ public class InterfaceInvocation implements TIBLayoutConstants, SizeConstants {
     for (RVMMethod im : interfaceMethods) {
       if (im.isClassInitializer()) continue;
       if (VM.VerifyAssertions) VM._assert(im.isPublic() && im.isAbstract());
-      RVMMethod vm = C.findVirtualMethod(im.getName(), im.getDescriptor());
+      RVMMethod vm = C.findVirtualMethod(im.getName(), im.getDescriptor(), im.getResolvedContext());
       // NOTE: if there is some error condition, then we are playing a dirty trick and
       //       pretending that a static method of RuntimeEntrypoints is a virtual method.
       //       Since the methods in question take no arguments, we can get away with this.
@@ -276,9 +280,9 @@ public class InterfaceInvocation implements TIBLayoutConstants, SizeConstants {
       }
       if (vm.isStatic()) {
         vm.compile();
-        iTable.set(getITableIndex(I, im.getName(), im.getDescriptor()), vm.getCurrentEntryCodeArray());
+        iTable.set(getITableIndex(I, im.getName(), im.getDescriptor(), im.getResolvedContext()), vm.getCurrentEntryCodeArray());
       } else {
-        iTable.set(getITableIndex(I, im.getName(), im.getDescriptor()), tib.getVirtualMethod(vm.getOffset()));
+        iTable.set(getITableIndex(I, im.getName(), im.getDescriptor(), im.getResolvedContext()), tib.getVirtualMethod(vm.getOffset()));
       }
     }
     return iTable;
@@ -291,15 +295,21 @@ public class InterfaceInvocation implements TIBLayoutConstants, SizeConstants {
   /**
    * Return the index of the interface method m in the itable
    */
-  public static int getITableIndex(RVMClass klass, Atom mname, Atom mdesc) {
+  // Octet: Static cloning: Support multiple resolved methods for every method reference.
+  public static int getITableIndex(RVMClass klass, Atom mname, Atom mdesc, int context) {
     if (VM.VerifyAssertions) VM._assert(VM.BuildForITableInterfaceInvocation);
     if (VM.VerifyAssertions) VM._assert(klass.isInterface());
     RVMMethod[] methods = klass.getDeclaredMethods();
+    boolean foundSomething = false;
     for (int i = 0; i < methods.length; i++) {
       if (methods[i].getName() == mname && methods[i].getDescriptor() == mdesc) {
-        return i + 1;
+        foundSomething = true;
+        if (Context.isMatch(methods[i], context, /*resolve = */ false)) { // Velodrome: Context: Added a parameter
+          return i + 1;
+        }
       }
     }
+    if (VM.VerifyAssertions) { VM._assert(!foundSomething); }
     return -1;
   }
 
@@ -336,7 +346,8 @@ public class InterfaceInvocation implements TIBLayoutConstants, SizeConstants {
             RVMMethod[] interfaceMethods = I.getDeclaredMethods();
             for (RVMMethod im : interfaceMethods) {
               if (im.getName() == name && im.getDescriptor() == desc) {
-                iTable.set(getITableIndex(I, name, desc), m.getCurrentEntryCodeArray());
+                // Octet: Static cloning: Support multiple resolved methods for every method reference.
+                iTable.set(getITableIndex(I, name, desc, m.getResolvedContext()), m.getCurrentEntryCodeArray());
               }
             }
           }

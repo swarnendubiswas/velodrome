@@ -765,4 +765,10 @@ public abstract class Space implements Constants {
     Extent rtn = mb.lsh(LOG_BYTES_IN_MBYTE).toExtent();
     return chunkAlign(rtn, false);
   }
+  
+  /** Octet: helps us specify a virtual memory fraction that will yield a desired number of MBs */
+  public static float getFracForMB(int mb) {
+    return (float)(mb << LOG_BYTES_IN_MBYTE) / AVAILABLE_BYTES.toLong();
+  }
+  
 }

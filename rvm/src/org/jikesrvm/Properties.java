@@ -68,6 +68,9 @@ public class Properties extends Options {
    * progress during the execution of VM.boot
    */
   public static int verboseBoot = 0;
+  
+  // Velodrome: Adding a non-standard argument to identify benchmark category
+  public static int benchmarkCategory = 0;
 
   /**
    * The following is set on by -verbose:class command line argument.

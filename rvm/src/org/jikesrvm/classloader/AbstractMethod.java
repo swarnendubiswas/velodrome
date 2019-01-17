@@ -20,6 +20,8 @@ import org.jikesrvm.runtime.Entrypoints;
  */
 public final class AbstractMethod extends RVMMethod {
 
+  // Octet: Static cloning: Support multiple resolved methods for every method reference.
+
   /**
    * Construct abstract method information
    *
@@ -34,7 +36,7 @@ public final class AbstractMethod extends RVMMethod {
    */
   AbstractMethod(TypeReference declaringClass, MemberReference memRef, short modifiers,
                     TypeReference[] exceptionTypes, Atom signature, RVMAnnotation[] annotations,
-                    RVMAnnotation[][] parameterAnnotations, Object annotationDefault) {
+                    RVMAnnotation[][] parameterAnnotations, Object annotationDefault, int resolvedContext) {
     super(declaringClass,
           memRef,
           modifiers,
@@ -42,9 +44,18 @@ public final class AbstractMethod extends RVMMethod {
           signature,
           annotations,
           parameterAnnotations,
-          annotationDefault);
+          annotationDefault,
+          resolvedContext);
   }
 
+  AbstractMethod(AbstractMethod method, int resolvedContext) {
+    super(method, resolvedContext);
+  }
+  
+  RVMMethod cloneMethod(int resolvedContext) {
+    return new AbstractMethod(this, resolvedContext);
+  }
+  
   /**
    * By definition, abstract methods do not have associated code. Therefore,
    * this method will return an error handling method from

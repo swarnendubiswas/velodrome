@@ -324,13 +324,14 @@ public final class ClassLoaderProxy implements Constants, OptConstants {
   /**
    * Find the method of the given class that matches the given descriptor.
    */
-  public static RVMMethod lookupMethod(RVMClass cls, MethodReference ref) {
+  // Octet: Static cloning: Support multiple resolved methods for every method reference.
+  public static RVMMethod lookupMethod(RVMClass cls, MethodReference ref, int context) {
     RVMMethod newmeth = null;
     if (cls.isResolved() && !cls.isInterface()) {
       Atom mn = ref.getName();
       Atom md = ref.getDescriptor();
       for (; (newmeth == null) && (cls != null); cls = cls.getSuperClass()) {
-        newmeth = cls.findDeclaredMethod(mn, md);
+        newmeth = cls.findDeclaredMethod(mn, md, context);
       }
     }
     return newmeth;

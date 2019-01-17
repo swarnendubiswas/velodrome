@@ -13,8 +13,14 @@
 package org.jikesrvm.classloader;
 
 import org.jikesrvm.VM;
+import org.jikesrvm.velodrome.Velodrome;
 import org.vmmagic.pragma.Pure;
 import org.vmmagic.pragma.Uninterruptible;
+
+// Octet: Static cloning: We've modified this whole class to support multiple resolved methods for each member reference.
+
+// Velodrome: Context: Changed this class to support two static contexts for application methods (possibly 3 resolved contexts), 
+// and only one static context for VM/library methods.
 
 /**
  * A class to represent the reference in a class file to a method of
@@ -31,12 +37,40 @@ public final class MethodReference extends MemberReference {
    * types of parameters (not including "this", if virtual)
    */
   private final TypeReference[] parameterTypes;
+  
+  // Velodrome: Adding a flag to track whether this method is supposed to be non-atomic
+  // This variable should be true if/when the method is added to the exclusion list 
+  public boolean isNonAtomic;
 
   /**
    * The RVMMethod that this method reference resolved to (null if not yet resolved).
    */
-  private RVMMethod resolvedMember;
+  @Uninterruptible
+  private RVMMethod resolvedMember(int context) {
+    if (context == Context.VM_CONTEXT) {
+      return resolvedMemberVM;
+    } else if (context == Context.NONTRANS_CONTEXT) {
+      return resolvedMemberNonTrans;
+    } else if (context == Context.TRANS_CONTEXT) {
+      return resolvedMemberTrans;
+    } else {
+      if (VM.VerifyAssertions) { VM._assert(VM.NOT_REACHED); }
+      return null;
+    }
+  }
 
+  // Velodrome: Context: References to different versions of RVMMethod depending on the resolved context
+  private RVMMethod resolvedMemberVM;
+  private RVMMethod resolvedMemberTrans;
+  private RVMMethod resolvedMemberNonTrans;
+
+  // Velodrome: This now is meaningful only for application methods
+  /** This method is weird because there's a possible race -- but these variables should be set by the time it's called. */
+  @Uninterruptible
+  public boolean hasMultipleResolvedContexts() {
+    return resolvedMemberTrans != null && resolvedMemberNonTrans != null && resolvedMemberTrans != resolvedMemberNonTrans;
+  }
+  
   /**
    * Find or create a method reference
    * @see MemberReference#findOrCreate(TypeReference, Atom, Atom)
@@ -58,6 +92,14 @@ public final class MethodReference extends MemberReference {
     ClassLoader cl = tr.getClassLoader();
     returnType = d.parseForReturnType(cl);
     parameterTypes = d.parseForParameterTypes(cl);
+    
+    // Velodrome: Check and store the fact whether the given method is supposed to be non-atomic
+    Atom at = Velodrome.constructMethodSignature(this);
+    if (Velodrome.notTransactions.contains(at)) {
+      isNonAtomic = true;
+    } else {
+      isNonAtomic = false;
+    }
   }
 
   /**
@@ -90,6 +132,7 @@ public final class MethodReference extends MemberReference {
   /**
    * Do this and that definitely refer to the different methods?
    */
+  /* Unused method:
   public boolean definitelyDifferent(MethodReference that) {
     if (this == that) return false;
     if (name != that.name || descriptor != that.descriptor) return true;
@@ -98,10 +141,12 @@ public final class MethodReference extends MemberReference {
     if (mine == null || theirs == null) return false;
     return mine != theirs;
   }
+  */
 
   /**
    * Do this and that definitely refer to the same method?
    */
+  /* Unused method:
   public boolean definitelySame(MethodReference that) {
     if (this == that) return true;
     if (name != that.name || descriptor != that.descriptor) return false;
@@ -110,29 +155,39 @@ public final class MethodReference extends MemberReference {
     if (mine == null || theirs == null) return false;
     return mine == theirs;
   }
+  */
 
   /**
    * Has the method reference already been resolved into a target method?
    */
+  /* Unused method:
   public boolean isResolved() {
-    return resolvedMember != null;
+    return resolvedMember() != null;
   }
+  */
 
   /**
    * Get the member this reference has been resolved to, if
    * it has already been resolved. Does NOT force resolution.
    */
   @Uninterruptible
-  public RVMMethod getResolvedMember() {
-    return resolvedMember;
+  public RVMMethod getResolvedMember(int context) {
+    return resolvedMember(context);
   }
 
   /**
    * For use by RVMMethod constructor
    */
-  void setResolvedMember(RVMMethod it) {
-    if (VM.VerifyAssertions) VM._assert(resolvedMember == null || resolvedMember == it);
-    resolvedMember = it;
+  void setResolvedMember(RVMMethod it, boolean checkAssertion) {
+    if (it.getResolvedContext() == Context.TRANS_CONTEXT) {
+      resolvedMemberTrans = it;
+    } else if (it.getResolvedContext() == Context.NONTRANS_CONTEXT) {
+      resolvedMemberNonTrans = it;
+    } else if (it.getResolvedContext() == Context.VM_CONTEXT) {
+      resolvedMemberVM = it;
+    } else {
+      if (VM.VerifyAssertions) { VM._assert(VM.NOT_REACHED); }
+    }
   }
 
   /**
@@ -141,7 +196,7 @@ public final class MethodReference extends MemberReference {
    *
    * @return target method or {@code null} if the method cannot be resolved without classloading.
    */
-  public synchronized RVMMethod resolveInvokeSpecial() {
+  public synchronized RVMMethod resolveInvokeSpecial(int context) {
     RVMClass thisClass = (RVMClass) type.peekType();
     if (thisClass == null && name != RVMClassLoader.StandardObjectInitializerMethodName) {
       thisClass = (RVMClass) type.resolve();
@@ -152,7 +207,7 @@ public final class MethodReference extends MemberReference {
     if (thisClass == null) {
       return null; // can't be found now.
     }
-    RVMMethod sought = resolveInternal(thisClass);
+    RVMMethod sought = resolveInternal(thisClass, context);
 
     if (sought.isObjectInitializer()) {
       return sought;   // <init>
@@ -164,7 +219,7 @@ public final class MethodReference extends MemberReference {
     }
 
     for (; cls != null; cls = cls.getSuperClass()) {
-      RVMMethod found = cls.findDeclaredMethod(sought.getName(), sought.getDescriptor());
+      RVMMethod found = cls.findDeclaredMethod(sought.getName(), sought.getDescriptor(), sought.getResolvedContext());
       if (found != null) {
         return found; // new-style invokespecial semantics
       }
@@ -177,13 +232,13 @@ public final class MethodReference extends MemberReference {
    * the search order specified in JVM spec 5.4.3.3.
    * @return the RVMMethod that this method ref resolved to or {@code null} if it cannot be resolved.
    */
-  public RVMMethod peekResolvedMethod() {
-    if (resolvedMember != null) return resolvedMember;
+  public RVMMethod peekResolvedMethod(int context) {
+    if (resolvedMember(context) != null) return resolvedMember(context);
 
     // Hasn't been resolved yet. Try to do it now without triggering class loading.
     RVMType declaringClass = type.peekType();
     if (declaringClass == null) return null;
-    return resolveInternal((RVMClass)declaringClass);
+    return resolveInternal((RVMClass)declaringClass, context);
   }
 
   /**
@@ -191,11 +246,11 @@ public final class MethodReference extends MemberReference {
    * the search order specified in JVM specification 5.4.3.3.
    * @return the RVMMethod that this method reference resolved to.
    */
-  public synchronized RVMMethod resolve() {
-    if (resolvedMember != null) return resolvedMember;
+  public synchronized RVMMethod resolve(int context) {
+    if (resolvedMember(context) != null) return resolvedMember(context);
 
     // Hasn't been resolved yet. Do it now triggering class loading if necessary.
-    return resolveInternal((RVMClass) type.resolve());
+    return resolveInternal((RVMClass) type.resolve(), context);
   }
 
   /**
@@ -223,7 +278,7 @@ public final class MethodReference extends MemberReference {
     // See if method is explicitly declared in any superclass
     for (RVMClass c = declaringClass; c != null; c = c.getSuperClass()) {
 
-      if (c.findDeclaredMethod(name, descriptor) != null) {
+      if (c.hasDeclaredMethodWithAnyContext(name, descriptor)) {
         // Method declared in superclass => not interface method
         return false;
       }
@@ -233,7 +288,7 @@ public final class MethodReference extends MemberReference {
     for (RVMClass c = declaringClass; c != null; c = c.getSuperClass()) {
       // See if method is in any interfaces of c
       for (RVMClass intf : c.getDeclaredInterfaces()) {
-        if (searchInterfaceMethods(intf) != null) {
+        if (hasInterfaceMethodWithAnyContext(intf)) {
           // Found method in interface or superinterface
           return true;
         }
@@ -249,14 +304,14 @@ public final class MethodReference extends MemberReference {
    * SysCall annotated methods we don't know until they are resolved.
    */
   public boolean isMagic() {
-    return getType().isMagicType() || ((resolvedMember != null) && (resolvedMember.isSysCall() || resolvedMember.isSpecializedInvoke()));
+    return getType().isMagicType() || ((resolvedMember(Context.VM_CONTEXT) != null) && (resolvedMember(Context.VM_CONTEXT).isSysCall() || resolvedMember(Context.VM_CONTEXT).isSpecializedInvoke()));
   }
 
   /**
    * Is the method reference to a specialized invoke? NB. we don't know until they are resolved.
    */
   public boolean isSpecializedInvoke() {
-    return (resolvedMember != null) && (resolvedMember.isSpecializedInvoke());
+    return (resolvedMember(Context.VM_CONTEXT) != null) && (resolvedMember(Context.VM_CONTEXT).isSpecializedInvoke());
   }
 
   /**
@@ -264,7 +319,7 @@ public final class MethodReference extends MemberReference {
    * SysCall annotated methods we don't know until they are resolved.
    */
   public boolean isSysCall() {
-    return (getType() == TypeReference.SysCall) || ((resolvedMember != null) && (resolvedMember.isSysCall()));
+    return (getType() == TypeReference.SysCall) || ((resolvedMember(Context.VM_CONTEXT) != null) && (resolvedMember(Context.VM_CONTEXT).isSysCall()));
   }
 
   /**
@@ -272,7 +327,7 @@ public final class MethodReference extends MemberReference {
    * the search order specified in JVM spec 5.4.3.3.
    * @return the RVMMethod that this method ref resolved to.
    */
-  private RVMMethod resolveInternal(RVMClass declaringClass) {
+  private RVMMethod resolveInternal(RVMClass declaringClass, int context) {
     final boolean DBG=false;
     if (!declaringClass.isResolved()) {
       declaringClass.resolve();
@@ -282,13 +337,15 @@ public final class MethodReference extends MemberReference {
         VM.sysWrite("Checking for <" + name + "," + descriptor + "> in class " + c + "...");
       }
 
-      RVMMethod it = c.findDeclaredMethod(name, descriptor);
+      RVMMethod it = c.findDeclaredMethod(name, descriptor, context);
       if (it != null) {
         if (DBG) {
           VM.sysWriteln("...found <" + name + "," + descriptor + "> in class " + c);
         }
-        resolvedMember = it;
-        return resolvedMember;
+        setResolvedMember(it, false);
+        return it;
+        //resolvedMember = it;
+        //return resolvedMember;
       }
       if (DBG) {
         VM.sysWriteln("...NOT found <" + name + "," + descriptor + "> in class " + c);
@@ -320,8 +377,8 @@ public final class MethodReference extends MemberReference {
    * the search order specified in JVM spec 5.4.3.4.
    * @return the RVMMethod that this method ref resolved to or {@code null} if it cannot be resolved without trigering class loading
    */
-  public RVMMethod peekInterfaceMethod() {
-    if (resolvedMember != null) return resolvedMember;
+  public RVMMethod peekInterfaceMethod(int context) {
+    if (resolvedMember(context) != null) return resolvedMember(context);
 
     // Hasn't been resolved yet. Try to do it now.
     RVMClass declaringClass = (RVMClass) type.peekType();
@@ -330,7 +387,7 @@ public final class MethodReference extends MemberReference {
       declaringClass.resolve();
     }
     if (!declaringClass.isInterface()) return null;
-    return resolveInterfaceMethodInternal(declaringClass);
+    return resolveInterfaceMethodInternal(declaringClass, context);
   }
 
   /**
@@ -338,8 +395,8 @@ public final class MethodReference extends MemberReference {
    * the search order specified in JVM spec 5.4.3.4.
    * @return the RVMMethod that this method ref resolved to
    */
-  public RVMMethod resolveInterfaceMethod() throws IncompatibleClassChangeError, NoSuchMethodError {
-    if (resolvedMember != null) return resolvedMember;
+  public RVMMethod resolveInterfaceMethod(int context) throws IncompatibleClassChangeError, NoSuchMethodError {
+    if (resolvedMember(context) != null) return resolvedMember(context);
 
     // Hasn't been resolved yet. Do it now.
     RVMClass declaringClass = (RVMClass) type.resolve();
@@ -352,7 +409,7 @@ public final class MethodReference extends MemberReference {
     if (!declaringClass.isInterface() && !isMiranda()) {
       throw new IncompatibleClassChangeError();
     }
-    RVMMethod ans = resolveInterfaceMethodInternal(declaringClass);
+    RVMMethod ans = resolveInterfaceMethodInternal(declaringClass, context);
     if (ans == null) {
       throw new NoSuchMethodError(this.toString());
     }
@@ -364,28 +421,43 @@ public final class MethodReference extends MemberReference {
    * the search order specified in JVM spec 5.4.3.4.
    * @return the RVMMethod that this method ref resolved to or {@code null} for error
    */
-  private RVMMethod resolveInterfaceMethodInternal(RVMClass declaringClass) {
-    RVMMethod it = declaringClass.findDeclaredMethod(name, descriptor);
+  private RVMMethod resolveInterfaceMethodInternal(RVMClass declaringClass, int context) {
+    RVMMethod it = declaringClass.findDeclaredMethod(name, descriptor, context);
     if (it != null) {
-      resolvedMember = it;
-      return resolvedMember;
+      setResolvedMember(it, false);
+      return it;
+      //resolvedMember = it;
+      //return resolvedMember;
     }
     for (RVMClass intf : declaringClass.getDeclaredInterfaces()) {
-      it = searchInterfaceMethods(intf);
+      it = searchInterfaceMethods(intf, context);
       if (it != null) {
-        resolvedMember = it;
-        return resolvedMember;
+        setResolvedMember(it, false);
+        return it;
+        //resolvedMember = it;
+        //return resolvedMember;
       }
     }
     return null;
   }
 
-  private RVMMethod searchInterfaceMethods(RVMClass c) {
+  private boolean hasInterfaceMethodWithAnyContext(RVMClass c) {
     if (!c.isResolved()) c.resolve();
-    RVMMethod it = c.findDeclaredMethod(name, descriptor);
+    boolean has = c.hasDeclaredMethodWithAnyContext(name, descriptor);
+    if (has) return true;
+    for (RVMClass intf : c.getDeclaredInterfaces()) {
+      has = hasInterfaceMethodWithAnyContext(intf);
+      if (has) return true;
+    }
+    return false;
+  }
+
+  private RVMMethod searchInterfaceMethods(RVMClass c, int context) {
+    if (!c.isResolved()) c.resolve();
+    RVMMethod it = c.findDeclaredMethod(name, descriptor, context);
     if (it != null) return it;
     for (RVMClass intf : c.getDeclaredInterfaces()) {
-      it = searchInterfaceMethods(intf);
+      it = searchInterfaceMethods(intf, context);
       if (it != null) return it;
     }
     return null;

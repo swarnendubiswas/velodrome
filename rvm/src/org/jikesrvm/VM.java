@@ -12,15 +12,17 @@
  */
 package org.jikesrvm;
 
+import static org.jikesrvm.runtime.SysCall.sysCall;
+
 import org.jikesrvm.ArchitectureSpecific.ThreadLocalState;
 import org.jikesrvm.adaptive.controller.Controller;
 import org.jikesrvm.adaptive.util.CompilerAdvice;
 import org.jikesrvm.classloader.Atom;
 import org.jikesrvm.classloader.BootstrapClassLoader;
+import org.jikesrvm.classloader.MemberReference;
 import org.jikesrvm.classloader.RVMClass;
 import org.jikesrvm.classloader.RVMClassLoader;
 import org.jikesrvm.classloader.RVMMember;
-import org.jikesrvm.classloader.MemberReference;
 import org.jikesrvm.classloader.RVMMethod;
 import org.jikesrvm.classloader.TypeDescriptorParsing;
 import org.jikesrvm.classloader.TypeReference;
@@ -28,20 +30,19 @@ import org.jikesrvm.compilers.baseline.BaselineCompiler;
 import org.jikesrvm.compilers.common.BootImageCompiler;
 import org.jikesrvm.compilers.common.RuntimeCompiler;
 import org.jikesrvm.mm.mminterface.MemoryManager;
+import org.jikesrvm.octet.Octet;
 import org.jikesrvm.runtime.BootRecord;
 import org.jikesrvm.runtime.DynamicLibrary;
 import org.jikesrvm.runtime.Entrypoints;
 import org.jikesrvm.runtime.ExitStatus;
+import org.jikesrvm.runtime.FileSystem;
 import org.jikesrvm.runtime.Magic;
 import org.jikesrvm.runtime.RuntimeEntrypoints;
 import org.jikesrvm.runtime.SysCall;
-
-import static org.jikesrvm.runtime.SysCall.sysCall;
 import org.jikesrvm.scheduler.Lock;
 import org.jikesrvm.scheduler.MainThread;
-import org.jikesrvm.scheduler.Synchronization;
 import org.jikesrvm.scheduler.RVMThread;
-import org.jikesrvm.runtime.FileSystem;
+import org.jikesrvm.scheduler.Synchronization;
 import org.jikesrvm.tuningfork.TraceEngine;
 import org.vmmagic.pragma.Entrypoint;
 import org.vmmagic.pragma.Inline;
@@ -128,6 +129,10 @@ public class VM extends Properties implements Constants, ExitStatus {
 
     sysWriteLockOffset = Entrypoints.sysWriteLockField.getOffset();
     if (verboseBoot >= 1) VM.sysWriteln("Booting");
+
+    // Velodrome: Adding a non-standard argument to identify benchmark category
+    benchmarkCategory = BootRecord.the_boot_record.benchmarkCategory;
+    if (VM.VerifyAssertions) { VM._assert(benchmarkCategory >= 0); }
 
     // Set up the current RVMThread object.  The bootstrap program
     // has placed a pointer to the current RVMThread in a special
@@ -402,6 +407,15 @@ public class VM extends Properties implements Constants, ExitStatus {
 
     // Inform interested subsystems that VM is fully booted.
     VM.fullyBooted = true;
+
+    // Octet: perform startup activities. It is important that boot() is called after the variable fullyBooted is set,
+    // otherwise there could be issues faced with class loading. For example, consider that a client analysis that 
+    // overrides boot() and wants to read from a file, say using the following logic: 
+    // BufferedReader reader = new BufferedReader(new FileReader(file));
+    // During such cases, the class will be resolved, and resolution might fail in BootstrapClassLoader.findClass() 
+    // since fullyBooted is not set yet.
+    Octet.boot();
+
     MemoryManager.fullyBootedVM();
     BaselineCompiler.fullyBootedVM();
     TraceEngine.engine.fullyBootedVM();

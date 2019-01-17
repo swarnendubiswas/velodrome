@@ -72,6 +72,8 @@ uint64_t initialHeapSize;       /* Declared in bootImageRunner.h */
 uint64_t maximumHeapSize;       /* Declared in bootImageRunner.h */
 
 int verboseBoot;                /* Declared in bootImageRunner.h */
+// Velodrome: Adding a non-standard argument to identify benchmark category
+int benchmarkCategory;			    /* Declared in bootImageRunner.h */
 
 static int DEBUG = 0;                   // have to set this from a debugger
 static const unsigned BYTES_IN_PAGE = MMTk_Constants_BYTES_IN_PAGE;
@@ -225,6 +227,31 @@ processCommandLineArguments(const char *CLAs[], int n_CLAs, bool *fastExit)
             }
 
             verboseBoot = vb;
+            continue;
+        }
+        // Velodrome: Adding a non-standard argument to identify benchmark category
+        // "-X:benchmarkCategory=" is of 21 characters
+        if (strnequal(token, nonStandardArgs[BENCHMARKCATEGORY_INDEX], 21)) {
+            subtoken = token + 21;
+            errno = 0;
+            char *endp;
+            long bc = strtol(subtoken, &endp, 0);
+            while (*endp && isspace(*endp)) // gobble trailing spaces
+                ++endp;
+
+            if (bc < 0) {
+                fprintf(SysTraceFile, "%s: \"%s\": You may not specify a negative benchmarkCategory value\n", Me, token);
+                *fastExit = true; break;
+            } else if (errno == ERANGE
+                       || bc > INT_MAX ) {
+                fprintf(SysTraceFile, "%s: \"%s\": too big a number to represent internally\n", Me, token);
+                *fastExit = true; break;
+            } else if (*endp) {
+                fprintf(SysTraceFile, "%s: \"%s\": I don't recognize \"%s\" as a number\n", Me, token, subtoken);
+                *fastExit = true; break;
+            }
+
+            benchmarkCategory = bc;
             continue;
         }
         /*  Args that don't apply to us (from the Sun JVM); skip 'em. */

@@ -37,8 +37,10 @@ static const int BASE_INDEX                    = RECOMP_INDEX+1;
 static const int OPT_INDEX                     = BASE_INDEX+1;
 static const int VMCLASSES_INDEX               = OPT_INDEX+1;
 static const int PROCESSORS_INDEX              = VMCLASSES_INDEX+1;
+// Velodrome: Adding a non-standard argument to identify benchmark category
+static const int BENCHMARKCATEGORY_INDEX       = PROCESSORS_INDEX+1;
 
-static const int numNonstandardArgs      = PROCESSORS_INDEX+1;
+static const int numNonstandardArgs      = BENCHMARKCATEGORY_INDEX+1;
 
 static const char* nonStandardArgs[numNonstandardArgs] = {
    "-X",
@@ -59,6 +61,7 @@ static const char* nonStandardArgs[numNonstandardArgs] = {
    "-X:opt",
    "-X:vmClasses=",
    "-X:availableProcessors=",
+   "-X:benchmarkCategory=", // Velodrome: Adding a non-standard argument to identify benchmark category
 };
 
 // a NULL-terminated list.
@@ -66,6 +69,8 @@ static const char* nonStandardUsage[] = {
    "  -X                         Print usage on nonstandard options",
    "  -X:verbose                 Print out additional lowlevel information",
    "  -X:verboseBoot=<number>    Print out messages while booting VM",
+   // Velodrome: Adding a non-standard argument to identify benchmark category
+   "  -X:benchmarkCategory=<num> Velodrome specific, pass benchmark identification information to the RVM, check EXP for values",
    "  -Xms<number><unit>         Initial size of heap",
    "  -Xmx<number><unit>         Maximum size of heap",
    "  -X:sysLogfile=<filename>   Write standard error message to <filename>",

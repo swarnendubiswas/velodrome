@@ -81,6 +81,14 @@ public class EscapeTransformations extends CompilerPhase {
     return false;
   }
 
+  /** Octet: use Jikes's existing escape analysis to identify objects that definitely don't escape their allocating thread */
+  // Octet: TODO: evaluate whether escape analysis is still broken in Jikes 3.1.2 / 3.1.3  
+  public static FI_EscapeSummary getEscapeSummary(IR ir) {
+    SimpleEscape analyzer = new SimpleEscape();
+    FI_EscapeSummary summary = analyzer.simpleEscapeAnalysis(ir);
+    return summary;
+  }
+  
   /**
    * Perform the transformations
    *

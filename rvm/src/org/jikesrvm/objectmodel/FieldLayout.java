@@ -16,6 +16,7 @@ import org.jikesrvm.VM;
 import org.jikesrvm.SizeConstants;
 import org.jikesrvm.classloader.RVMClass;
 import org.jikesrvm.classloader.RVMField;
+import org.jikesrvm.velodrome.Velodrome;
 import org.vmmagic.unboxed.Offset;
 
 /**
@@ -119,6 +120,11 @@ public abstract class FieldLayout implements SizeConstants {
         if (!field.isStatic() && !field.hasOffset()) {
           if (field.getSize() == BYTES_IN_LONG) {
             layoutField(fieldLayout, klass, field, BYTES_IN_LONG);
+            
+            // Velodrome: layout field metadata
+            if (Velodrome.addPerFieldVelodromeMetadata()) {
+              layoutFieldMetadata(fieldLayout, klass, field);
+            }
           }
         }
       }
@@ -129,6 +135,13 @@ public abstract class FieldLayout implements SizeConstants {
       if (!field.isStatic() && !field.hasOffset()) {              // Allocate space in the object?
         layoutField(fieldLayout, klass, field, fieldSize);
       }
+      // Velodrome: layout field metadata
+      if (Velodrome.addPerFieldVelodromeMetadata()) {
+        if (!field.isStatic()) {
+          layoutFieldMetadata(fieldLayout, klass, field);
+        }
+      }
+      
     }
     // JavaHeader requires objects to be int sized/aligned
     if (VM.VerifyAssertions) VM._assert((fieldLayout.getObjectSize() & 0x3) == 0);
@@ -192,4 +205,31 @@ public abstract class FieldLayout implements SizeConstants {
     boolean isRef = field.isReferenceType();
     setOffset(klass, field, layout.nextOffset(fieldSize, isRef));
   }
+  
+  /** Velodrome: make room for per-field metadata */
+  private boolean layoutFieldMetadata(FieldLayoutContext layout, RVMClass klass, RVMField field) {
+    if (Velodrome.shouldAddPerFieldVelodromeMetadata(field)) {
+      if (!field.hasVelodromeMetadataOffset()) {
+        int numFields = Velodrome.getNumFields(field); // Currently is two
+        Offset metadataOffset;
+        if (numFields > 1) {
+          metadataOffset = Offset.fromIntSignExtend(layout.nextOffsetUnaligned(Velodrome.FIELD_SIZE * numFields));
+        } else {
+          metadataOffset = Offset.fromIntSignExtend(layout.nextOffset(Velodrome.FIELD_SIZE, true));
+        }
+        setVelodromeMetadataOffset(klass, field, metadataOffset);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Velodrome: set metadata offset */
+  protected void setVelodromeMetadataOffset(RVMClass klass, RVMField field, Offset offset) {
+    if (VM.VerifyAssertions) { VM._assert(offset.sGE(Offset.zero())); }
+    Offset metadataOffset = offset.plus(JavaHeader.objectStartOffset(klass)).plus(ObjectModel.computeScalarHeaderSize(klass));
+    field.setWriteMetadataOffset(metadataOffset);
+    field.setReadMetadataOffset(metadataOffset.plus(BYTES_IN_ADDRESS));
+  }
+
 }

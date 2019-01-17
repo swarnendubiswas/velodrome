@@ -18,6 +18,7 @@ import org.jikesrvm.adaptive.controller.Controller;
 import org.jikesrvm.adaptive.util.AOSLogging;
 import org.jikesrvm.adaptive.util.CompilerAdvice;
 import org.jikesrvm.adaptive.util.CompilerAdviceAttribute;
+import org.jikesrvm.classloader.Context;
 import org.jikesrvm.classloader.RVMClass;
 import org.jikesrvm.classloader.RVMClassLoader;
 import org.jikesrvm.classloader.RVMMethod;
@@ -122,7 +123,9 @@ public class BulkCompile implements Callbacks.StartupMonitor {
         }
 
         // Find the method
-        RVMMethod method = cls.findDeclaredMethod(value.getMethodName(), value.getMethodSig());
+        // Octet: Static cloning: Support multiple resolved methods for every method reference.
+        // Velodrome: Context: Blindly using TRANS_CONTEXT for now
+        RVMMethod method = cls.findDeclaredMethod(value.getMethodName(), value.getMethodSig(), Context.TRANS_CONTEXT);
 
 
         // If found, compile it

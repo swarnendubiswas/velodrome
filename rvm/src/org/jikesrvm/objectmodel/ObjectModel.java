@@ -461,23 +461,42 @@ public class ObjectModel implements JavaHeaderConstants, SizeConstants {
     JavaHeader.allocateThinLock(t);
   }
 
+  // Velodrome: Changes for tracking lock acquire/releases
   /**
-   * Generic lock
+   * Generic lock with Velodrome instrumentation
    */
   @Entrypoint
   @Unpreemptible("Become another thread when lock is contended, don't preempt in other cases")
   public static void genericLock(Object o) {
     JavaHeader.genericLock(o);
   }
+  
+  /**
+   * Generic lock without Velodrome instrumentation
+   */
+  @Entrypoint
+  @Unpreemptible("Become another thread when lock is contended, don't preempt in other cases")
+  public static void genericLockWithoutInstrumentation(Object o) {
+    JavaHeader.genericLockWithoutInstrumentation(o);
+  }
 
   /**
-   * Generic unlock
+   * Generic unlock with Velodrome instrumentation
    */
   @Entrypoint
   @Unpreemptible("No preemption normally, but may raise exceptions")
   public static void genericUnlock(Object o) {
     JavaHeader.genericUnlock(o);
   }
+  
+  /**
+   * Generic unlock without Velodrome instrumentation
+   */
+  @Entrypoint
+  @Unpreemptible("No preemption normally, but may raise exceptions")
+  public static void genericUnlockWithoutInstrumentation(Object o) {
+    JavaHeader.genericUnlockWithoutInstrumentation(o);
+  }  
 
   /**
    * @param obj an object

@@ -25,7 +25,16 @@ import org.jikesrvm.runtime.Time;
  */
 public final class VMSystem {
 
+  // Octet: TODO: try to add this
+  //static int arraycopySiteID = Site.newSite(Atom.findOrCreateAsciiAtom("VMSystem"), Atom.findOrCreateAsciiAtom("arraycopy"), -1);
   static void arraycopy(Object src, int srcPos, Object dst, int dstPos, int len) {
+    /*
+    if (Octet.instrAccess()) {
+      Instr.arrayReadBarrier(src, 0, arraycopySiteID);
+      Instr.arrayWriteBarrier(dst, 0, arraycopySiteID);
+    }
+    */
+    
     VMCommonLibrarySupport.arraycopy(src, srcPos, dst, dstPos, len);
   }
 
@@ -56,6 +65,11 @@ public final class VMSystem {
   static void setErr(PrintStream err) {
     VMCommonLibrarySupport.setSystemStreamField("err", err);
   }
+
+  // Octet: The VM's versions of these streams, which (unlike System.*) can't be changed by the application.
+  public static InputStream in;
+  public static PrintStream out;
+  public static PrintStream err;
 
   static InputStream makeStandardInputStream() { return null; }
 

@@ -16,9 +16,12 @@ import static org.jikesrvm.runtime.EntrypointHelper.getField;
 import static org.jikesrvm.runtime.EntrypointHelper.getMethod;
 
 import org.jikesrvm.VM;
+import org.jikesrvm.classloader.FieldReference;
+import org.jikesrvm.classloader.MethodReference;
 import org.jikesrvm.classloader.RVMField;
 import org.jikesrvm.classloader.RVMMethod;
 import org.jikesrvm.classloader.NormalMethod;
+import org.jikesrvm.classloader.TypeReference;
 
 /**
  * Fields and methods of the virtual machine that are needed by
@@ -32,8 +35,12 @@ public class Entrypoints {
 
   public static final NormalMethod bootMethod = EntrypointHelper.getMethod(org.jikesrvm.VM.class, "boot", "()V");
 
-  public static final RVMMethod java_lang_reflect_Method_invokeMethod =
+  // Octet: Static cloning: Use a method reference instead of a resolved method to simplify checking for a match.
+  /*public static final RVMMethod java_lang_reflect_Method_invokeMethod =
       getMethod(java.lang.reflect.Method.class, "invoke",
+          "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");*/
+  public static final MethodReference java_lang_reflect_Method_invokeMethodReference =
+      EntrypointHelper.getMethodReference(java.lang.reflect.Method.class, "invoke",
           "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
   public static final RVMMethod getClassFromStackFrame =
     getMethod(org.jikesrvm.classloader.RVMClass.class, "getClassFromStackFrame", "(I)Lorg/jikesrvm/classloader/RVMClass;");
@@ -95,13 +102,18 @@ public class Entrypoints {
       getMethod(org.jikesrvm.runtime.RuntimeEntrypoints.class, "deliverHardwareException", "(II)V");
   public static final NormalMethod unlockAndThrowMethod =
       getMethod(org.jikesrvm.runtime.RuntimeEntrypoints.class, "unlockAndThrow", "(Ljava/lang/Object;Ljava/lang/Throwable;)V");
+  
+  // Velodrome: Uninstrumented version 
+  public static final NormalMethod unlockAndThrowMethodWithoutInstrumentation =
+      getMethod(org.jikesrvm.runtime.RuntimeEntrypoints.class, "unlockAndThrowWithoutInstrumentation", "(Ljava/lang/Object;Ljava/lang/Throwable;)V");
 
   public static final RVMField gcLockField = getField("Ljava/lang/VMCommonLibrarySupport$GCLock;", "gcLock", int.class);
 
+  // Octet: Static cloning: Support multiple resolved methods for every method reference.
   public static final NormalMethod invokeInterfaceMethod =
       getMethod(org.jikesrvm.classloader.InterfaceInvocation.class,
                 "invokeInterface",
-                "(Ljava/lang/Object;I)Lorg/jikesrvm/ArchitectureSpecific$CodeArray;");
+                "(Ljava/lang/Object;II)Lorg/jikesrvm/ArchitectureSpecific$CodeArray;");
   public static final NormalMethod findItableMethod =
       getMethod(org.jikesrvm.classloader.InterfaceInvocation.class,
                 "findITable",
@@ -109,22 +121,126 @@ public class Entrypoints {
   public static final NormalMethod unresolvedInvokeinterfaceImplementsTestMethod =
       getMethod(org.jikesrvm.classloader.InterfaceInvocation.class,
                 "unresolvedInvokeinterfaceImplementsTest",
-                "(ILjava/lang/Object;)V");
+                "(ILjava/lang/Object;I)V");
 
-  public static final NormalMethod lockMethod =
+  // Velodrome: Lock methods with instrumentation
+  
+  public static final NormalMethod lockMethodWithInstrumentation =
       getMethod(org.jikesrvm.objectmodel.ObjectModel.class, "genericLock", "(Ljava/lang/Object;)V");
-  public static final NormalMethod unlockMethod =
+  public static final NormalMethod unlockMethodWithInstrumentation =
       getMethod(org.jikesrvm.objectmodel.ObjectModel.class, "genericUnlock", "(Ljava/lang/Object;)V");
 
-  public static final NormalMethod inlineLockMethod =
+  public static final NormalMethod inlineLockMethodWithInstrumentation =
       getMethod(org.jikesrvm.scheduler.ThinLock.class,
                 "inlineLock",
                 "(Ljava/lang/Object;Lorg/vmmagic/unboxed/Offset;)V");
-  public static final NormalMethod inlineUnlockMethod =
+  public static final NormalMethod inlineUnlockMethodWithInstrumentation =
       getMethod(org.jikesrvm.scheduler.ThinLock.class,
                 "inlineUnlock",
                 "(Ljava/lang/Object;Lorg/vmmagic/unboxed/Offset;)V");
+  
+  // Velodrome: Lock methods without instrumentation
+  
+  public static final NormalMethod lockMethodWithoutInstrumentation =
+      getMethod(org.jikesrvm.objectmodel.ObjectModel.class, "genericLockWithoutInstrumentation", "(Ljava/lang/Object;)V");
+  public static final NormalMethod unlockMethodWithoutInstrumentation =
+      getMethod(org.jikesrvm.objectmodel.ObjectModel.class, "genericUnlockWithoutInstrumentation", "(Ljava/lang/Object;)V");
 
+  public static final NormalMethod inlineLockMethodWithoutInstrumentation =
+      getMethod(org.jikesrvm.scheduler.ThinLock.class,
+                "inlineLockWithoutInstrumentation",
+                "(Ljava/lang/Object;Lorg/vmmagic/unboxed/Offset;)V");
+  public static final NormalMethod inlineUnlockMethodWithoutInstrumentation =
+      getMethod(org.jikesrvm.scheduler.ThinLock.class,
+                "inlineUnlockWithoutInstrumentation",
+                "(Ljava/lang/Object;Lorg/vmmagic/unboxed/Offset;)V");
+
+  // Octet: instrumentation methods and fields
+  
+  /** Call to resolve unresolved static */
+  public static final NormalMethod octetResolveMethod = getMethod(org.jikesrvm.octet.OctetBarriers.class, "getResolved", "(I)Lorg/vmmagic/unboxed/Word;");
+  
+  public static final NormalMethod octetFieldReadBarrierResolvedMethod = getMethod(org.jikesrvm.octet.OctetBarriers.class, "fieldReadBarrierResolved", "(Ljava/lang/Object;II)V");
+  public static final NormalMethod octetFieldReadBarrierStaticResolvedMethod = getMethod(org.jikesrvm.octet.OctetBarriers.class, "fieldReadBarrierStaticResolved", "(Lorg/vmmagic/unboxed/Offset;II)V");
+  public static final NormalMethod octetFieldWriteBarrierResolvedMethod = getMethod(org.jikesrvm.octet.OctetBarriers.class, "fieldWriteBarrierResolved", "(Ljava/lang/Object;II)V");
+  public static final NormalMethod octetFieldWriteBarrierStaticResolvedMethod = getMethod(org.jikesrvm.octet.OctetBarriers.class, "fieldWriteBarrierStaticResolved", "(Lorg/vmmagic/unboxed/Offset;II)V");
+  public static final NormalMethod octetFieldReadBarrierUnresolvedMethod = getMethod(org.jikesrvm.octet.OctetBarriers.class, "fieldReadBarrierUnresolved", "(Ljava/lang/Object;II)V");
+  public static final NormalMethod octetFieldReadBarrierStaticUnresolvedMethod = getMethod(org.jikesrvm.octet.OctetBarriers.class, "fieldReadBarrierStaticUnresolved", "(II)V");
+  public static final NormalMethod octetFieldWriteBarrierUnresolvedMethod = getMethod(org.jikesrvm.octet.OctetBarriers.class, "fieldWriteBarrierUnresolved", "(Ljava/lang/Object;II)V");
+  public static final NormalMethod octetFieldWriteBarrierStaticUnresolvedMethod = getMethod(org.jikesrvm.octet.OctetBarriers.class, "fieldWriteBarrierStaticUnresolved", "(II)V");
+  public static final NormalMethod octetArrayReadBarrierMethod = getMethod(org.jikesrvm.octet.OctetBarriers.class, "arrayReadBarrier", "(Ljava/lang/Object;II)V");
+  public static final NormalMethod octetArrayWriteBarrierMethod = getMethod(org.jikesrvm.octet.OctetBarriers.class, "arrayWriteBarrier", "(Ljava/lang/Object;II)V");
+  
+  public static final NormalMethod octetReadObjectMethod = getMethod(org.jikesrvm.octet.OctetBarriers.class, "readObject", "(Ljava/lang/Object;II)Z");
+  public static final NormalMethod octetWriteObjectMethod = getMethod(org.jikesrvm.octet.OctetBarriers.class, "writeObject", "(Ljava/lang/Object;II)Z");
+  public static final NormalMethod octetReadStaticMethod = getMethod(org.jikesrvm.octet.OctetBarriers.class, "readStatic", "(Lorg/vmmagic/unboxed/Offset;II)Z");
+  public static final NormalMethod octetWriteStaticMethod = getMethod(org.jikesrvm.octet.OctetBarriers.class, "writeStatic", "(Lorg/vmmagic/unboxed/Offset;II)Z");
+
+  public static final NormalMethod octetReadSlowPathMethod = getMethod(org.jikesrvm.octet.StateTransfers.class, "readSlowPath", "(Lorg/vmmagic/unboxed/Address;Lorg/vmmagic/unboxed/Offset;Lorg/vmmagic/unboxed/Word;II)V");
+  public static final NormalMethod octetWriteSlowPathMethod = getMethod(org.jikesrvm.octet.StateTransfers.class, "writeSlowPath", "(Lorg/vmmagic/unboxed/Address;Lorg/vmmagic/unboxed/Offset;Lorg/vmmagic/unboxed/Word;II)V");
+  
+  public static final NormalMethod octetPessimisticFieldReadBarrierResolvedMethod = getMethod(org.jikesrvm.octet.PessimisticBarriers.class, "fieldReadBarrierResolved", "(Ljava/lang/Object;II)V");
+  public static final NormalMethod octetPessimisticFieldReadBarrierStaticResolvedMethod = getMethod(org.jikesrvm.octet.PessimisticBarriers.class, "fieldReadBarrierStaticResolved", "(Lorg/vmmagic/unboxed/Offset;II)V");
+  public static final NormalMethod octetPessimisticFieldWriteBarrierResolvedMethod = getMethod(org.jikesrvm.octet.PessimisticBarriers.class, "fieldWriteBarrierResolved", "(Ljava/lang/Object;II)V");
+  public static final NormalMethod octetPessimisticFieldWriteBarrierStaticResolvedMethod = getMethod(org.jikesrvm.octet.PessimisticBarriers.class, "fieldWriteBarrierStaticResolved", "(Lorg/vmmagic/unboxed/Offset;II)V");
+  public static final NormalMethod octetPessimisticFieldReadBarrierUnresolvedMethod = getMethod(org.jikesrvm.octet.PessimisticBarriers.class, "fieldReadBarrierUnresolved", "(Ljava/lang/Object;II)V");
+  public static final NormalMethod octetPessimisticFieldReadBarrierStaticUnresolvedMethod = getMethod(org.jikesrvm.octet.PessimisticBarriers.class, "fieldReadBarrierStaticUnresolved", "(II)V");
+  public static final NormalMethod octetPessimisticFieldWriteBarrierUnresolvedMethod = getMethod(org.jikesrvm.octet.PessimisticBarriers.class, "fieldWriteBarrierUnresolved", "(Ljava/lang/Object;II)V");
+  public static final NormalMethod octetPessimisticFieldWriteBarrierStaticUnresolvedMethod = getMethod(org.jikesrvm.octet.PessimisticBarriers.class, "fieldWriteBarrierStaticUnresolved", "(II)V");
+  public static final NormalMethod octetPessimisticArrayReadBarrierMethod = getMethod(org.jikesrvm.octet.PessimisticBarriers.class, "arrayReadBarrier", "(Ljava/lang/Object;II)V");
+  public static final NormalMethod octetPessimisticArrayWriteBarrierMethod = getMethod(org.jikesrvm.octet.PessimisticBarriers.class, "arrayWriteBarrier", "(Ljava/lang/Object;II)V");
+
+  public static final NormalMethod octetBlockCommunicationRequestsMethod = getMethod(org.jikesrvm.octet.Communication.class, "blockCommunicationRequests", "()V");
+  public static final NormalMethod octetUnblockCommunicationRequestsMethod = getMethod(org.jikesrvm.octet.Communication.class, "unblockCommunicationRequests", "()V");
+
+  public static final RVMField octetRequestsField = getField(org.jikesrvm.scheduler.RVMThread.class, "octetRequests", org.vmmagic.unboxed.Word.class);
+
+  public static final RVMField octetGlobalReadSharedCounterField = getField(org.jikesrvm.octet.OctetState.class, "globalReadSharedCounter", org.vmmagic.unboxed.Word.class);
+  public static final RVMField octetThreadReadSharedCounterField = getField(org.jikesrvm.scheduler.RVMThread.class, "octetReadSharedCounter", org.vmmagic.unboxed.Word.class);
+
+  // Octet: Static cloning: Runtime instrumentation method that checks that static contexts are correct dynamically.
+  public static final NormalMethod checkLibraryContextMethod = getMethod(org.jikesrvm.classloader.Context.class, "checkLibraryContext", "()V");
+
+  // Octet: Static cloning: Support for using different versions of standard streams between application and VM contexts.
+  public static final FieldReference systemOut   = getField(java.lang.System.class,   "out", java.io.PrintStream.class).getMemberRef().asFieldReference();
+  public static final FieldReference systemErr   = getField(java.lang.System.class,   "err", java.io.PrintStream.class).getMemberRef().asFieldReference();
+  public static final FieldReference systemIn    = getField(java.lang.System.class,   "in",  java.io.InputStream.class).getMemberRef().asFieldReference();
+  public static final FieldReference vmSystemOut = getField(java.lang.VMSystem.class, "out", java.io.PrintStream.class).getMemberRef().asFieldReference();
+  public static final FieldReference vmSystemErr = getField(java.lang.VMSystem.class, "err", java.io.PrintStream.class).getMemberRef().asFieldReference();
+  public static final FieldReference vmSystemIn  = getField(java.lang.VMSystem.class, "in",  java.io.InputStream.class).getMemberRef().asFieldReference();
+
+  // Velodrome: Added entry points to track start/end of transactions and for instrumentation
+  public static final NormalMethod velodromeStartTransactionMethod = getMethod(org.jikesrvm.velodrome.TransactionalHBGraph.class, "startTransaction", "(II)V");
+  public static final NormalMethod velodromeEndTransactionMethod = getMethod(org.jikesrvm.velodrome.TransactionalHBGraph.class, "endTransaction", "(II)V");
+  public static final NormalMethod velodromeCheckMethodContextAtPrologMethod = getMethod(org.jikesrvm.velodrome.TransactionalHBGraph.class, "checkMethodContextAtProlog", "()V");
+
+  // Velodrome: Read/write barriers
+
+  public static final NormalMethod velodromeFieldReadBarrierResolvedMethod = getMethod(org.jikesrvm.velodrome.VelodromeBarriers.class, "fieldReadBarrierResolved", "(Ljava/lang/Object;IIII)V");
+  public static final NormalMethod velodromeFieldWriteBarrierResolvedMethod = getMethod(org.jikesrvm.velodrome.VelodromeBarriers.class, "fieldWriteBarrierResolved", "(Ljava/lang/Object;IIII)V");
+  
+  public static final NormalMethod velodromeFieldReadBarrierStaticResolvedMethod = getMethod(org.jikesrvm.velodrome.VelodromeBarriers.class, "fieldReadBarrierStaticResolved", "(IIII)V");
+  public static final NormalMethod velodromeFieldWriteBarrierStaticResolvedMethod = getMethod(org.jikesrvm.velodrome.VelodromeBarriers.class, "fieldWriteBarrierStaticResolved", "(IIII)V");
+
+  public static final NormalMethod velodromeFieldReadBarrierUnresolvedMethod = getMethod(org.jikesrvm.velodrome.VelodromeBarriers.class, "fieldReadBarrierUnresolved", "(Ljava/lang/Object;IIII)V");
+  public static final NormalMethod velodromeFieldWriteBarrierUnresolvedMethod = getMethod(org.jikesrvm.velodrome.VelodromeBarriers.class, "fieldWriteBarrierUnresolved", "(Ljava/lang/Object;IIII)V");
+  
+  public static final NormalMethod velodromeFieldReadBarrierStaticUnresolvedMethod = getMethod(org.jikesrvm.velodrome.VelodromeBarriers.class, "fieldReadBarrierStaticUnresolved", "(IIII)V");
+  public static final NormalMethod velodromeFieldWriteBarrierStaticUnresolvedMethod = getMethod(org.jikesrvm.velodrome.VelodromeBarriers.class, "fieldWriteBarrierStaticUnresolved", "(IIII)V");
+  
+  public static final NormalMethod velodromeArrayReadBarrierMethod = getMethod(org.jikesrvm.velodrome.VelodromeBarriers.class, "arrayReadBarrier", "(Ljava/lang/Object;IIIII)V");
+  public static final NormalMethod velodromeArrayWriteBarrierMethod = getMethod(org.jikesrvm.velodrome.VelodromeBarriers.class, "arrayWriteBarrier", "(Ljava/lang/Object;IIIII)V");
+
+  // Velodrome: Post read/write barriers to unlock object metadata
+  public static final NormalMethod velodromeUnlockMetadataForResolvedFieldMethod = getMethod(org.jikesrvm.velodrome.VelodromeMetadataHelper.class, "unlockResolvedFieldMetadata", "(Ljava/lang/Object;III)V");
+  public static final NormalMethod velodromeUnlockMetadataForUnresolvedFieldMethod = getMethod(org.jikesrvm.velodrome.VelodromeMetadataHelper.class, "unlockUnresolvedFieldMetadata", "(Ljava/lang/Object;III)V");
+  public static final NormalMethod velodromeUnlockMetadataForStaticResolvedMethod = getMethod(org.jikesrvm.velodrome.VelodromeMetadataHelper.class, "unlockMetadataForStaticResolved", "(Lorg/vmmagic/unboxed/Offset;III)V");
+  public static final NormalMethod velodromeUnlockMetadataForStaticUnresolvedMethod = getMethod(org.jikesrvm.velodrome.VelodromeMetadataHelper.class, "unlockMetadataForStaticUnresolved", "(III)V");
+  public static final NormalMethod velodromeArrayPostBarrierMethod = getMethod(org.jikesrvm.velodrome.VelodromeMetadataHelper.class, "arrayPostBarrier", "(Ljava/lang/Object;III)V");
+  
+  // Velodrome: Field for outgoing edges
+  public static final RVMField velodromeOutgoingEdgesField = getField(org.jikesrvm.velodrome.Transaction.class, "outgoingEdges", org.jikesrvm.velodrome.TransactionsList.class);  
+  
   public static final NormalMethod lazyMethodInvokerMethod =
       getMethod(org.jikesrvm.runtime.DynamicLinker.class, "lazyMethodInvoker", "()V");
   public static final NormalMethod unimplementedNativeMethodMethod =
@@ -132,10 +248,16 @@ public class Entrypoints {
   public static final NormalMethod sysCallMethod =
       getMethod(org.jikesrvm.runtime.DynamicLinker.class, "sysCallMethod", "()V");
 
+  // Octet: Static cloning: Support multiple resolved methods for every method reference.
   public static final NormalMethod resolveMemberMethod =
-      getMethod(org.jikesrvm.classloader.TableBasedDynamicLinker.class, "resolveMember", "(I)I");
-  public static final RVMField memberOffsetsField =
-      getField(org.jikesrvm.classloader.TableBasedDynamicLinker.class, "memberOffsets", int[].class);
+      getMethod(org.jikesrvm.classloader.TableBasedDynamicLinker.class, "resolveMember", "(II)I");
+  // Velodrome: Context: We now have 3 resolved contexts
+  public static final RVMField[] memberOffsetsFields =
+    new RVMField[] {
+      getField(org.jikesrvm.classloader.TableBasedDynamicLinker.class, "memberOffsetsVM", int[].class),
+      getField(org.jikesrvm.classloader.TableBasedDynamicLinker.class, "memberOffsetsTrans", int[].class),
+      getField(org.jikesrvm.classloader.TableBasedDynamicLinker.class, "memberOffsetsNonTrans", int[].class),
+    };
 
   /** 1L */
   public static final RVMField longOneField = getField(org.jikesrvm.runtime.MathConstants.class, "longOne", long.class);
@@ -340,6 +462,13 @@ public class Entrypoints {
     getMethod(org.jikesrvm.mm.mminterface.Barriers.class, "objectFieldWrite", "(Ljava/lang/Object;Ljava/lang/Object;Lorg/vmmagic/unboxed/Offset;I)V");
   public static final NormalMethod objectArrayWriteBarrierMethod =
     getMethod(org.jikesrvm.mm.mminterface.Barriers.class, "objectArrayWrite", "([Ljava/lang/Object;ILjava/lang/Object;)V");
+
+  // Octet: support "pre-barriers" that don't actually perform the write
+  public static final NormalMethod objectFieldWritePreBarrierMethod =
+    getMethod(org.jikesrvm.mm.mminterface.Barriers.class, "objectFieldWritePreBarrier", "(Ljava/lang/Object;Ljava/lang/Object;Lorg/vmmagic/unboxed/Offset;I)V");
+  public static final NormalMethod objectArrayWritePreBarrierMethod =
+    getMethod(org.jikesrvm.mm.mminterface.Barriers.class, "objectArrayWritePreBarrier", "([Ljava/lang/Object;ILjava/lang/Object;)V");
+
   public static final NormalMethod objectFieldReadBarrierMethod =
     getMethod(org.jikesrvm.mm.mminterface.Barriers.class, "objectFieldRead", "(Ljava/lang/Object;Lorg/vmmagic/unboxed/Offset;I)Ljava/lang/Object;");
   public static final NormalMethod objectArrayReadBarrierMethod =
@@ -464,7 +593,9 @@ public class Entrypoints {
   public static final NormalMethod optResolveMethod;
   public static final NormalMethod optNewArrayArrayMethod;
   public static final NormalMethod optNew2DArrayMethod;
-  public static final NormalMethod sysArrayCopy;
+  // Octet: Static cloning: Match on method reference to simplify things.
+  public static final MethodReference sysArrayCopy;
+  //public static final NormalMethod sysArrayCopy;
 
   static {
     if (VM.BuildForOptCompiler) {
@@ -490,8 +621,10 @@ public class Entrypoints {
           getMethod(org.jikesrvm.compilers.opt.runtimesupport.OptLinker.class, "newArrayArray", "(I[II)Ljava/lang/Object;");
       optNew2DArrayMethod =
           getMethod(org.jikesrvm.compilers.opt.runtimesupport.OptLinker.class, "new2DArray", "(IIII)Ljava/lang/Object;");
-      sysArrayCopy = getMethod("Ljava/lang/VMCommonLibrarySupport;", "arraycopy", "(Ljava/lang/Object;ILjava/lang/Object;II)V");
-      sysArrayCopy.setRuntimeServiceMethod(false);
+      // Octet: Static cloning: To support multiple contexts, it's easier here to just make a method reference
+      sysArrayCopy = EntrypointHelper.getMethodReference(TypeReference.findOrCreate("Ljava/lang/VMCommonLibrarySupport;"), "arraycopy", "(Ljava/lang/Object;ILjava/lang/Object;II)V");
+      // Unmodified Jikes would set "runtime service method" to false to make up for getMethod() setting it to true. Instead it'll now just remain false.
+      //sysArrayCopy.setRuntimeServiceMethod(false);
     } else {
       specializedMethodsField = null;
       optThreadSwitchFromOsrOptMethod = null;

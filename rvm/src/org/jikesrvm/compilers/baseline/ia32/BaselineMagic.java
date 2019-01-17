@@ -55,6 +55,7 @@ import org.jikesrvm.ArchitectureSpecific.Assembler;
 import org.jikesrvm.ArchitectureSpecific.CodeArray;
 import org.jikesrvm.ArchitectureSpecific.Registers;
 import org.jikesrvm.classloader.Atom;
+import org.jikesrvm.classloader.Context;
 import org.jikesrvm.classloader.MethodReference;
 import org.jikesrvm.classloader.RVMArray;
 import org.jikesrvm.classloader.RVMMethod;
@@ -181,8 +182,9 @@ final class BaselineMagic {
       if ((dc != JavaHeader.class) &&
           (dc != ObjectModel.class)
       ){
+        // Octet: Static cloning: Support multiple resolved methods for every method reference.
         if (checkMR.needsDynamicLink(cm)) {
-          BaselineCompilerImpl.emitDynamicLinkingSequence(asm, S0, checkMR, true);
+          BaselineCompilerImpl.emitDynamicLinkingSequence(asm, S0, checkMR, true, Context.VM_CONTEXT);
           if (offset.NE(NO_SLOT)) {
             asm.emitMOV_Reg_RegDisp(T0, SP, offset);
           } else {
@@ -197,7 +199,7 @@ final class BaselineMagic {
             asm.emitMOV_Reg_RegInd(T0, SP);
           }
           asm.emitPUSH_Reg(T0);
-          asm.emitCALL_Abs(Magic.getTocPointer().plus(checkMR.peekResolvedMethod().getOffset()));
+          asm.emitCALL_Abs(Magic.getTocPointer().plus(checkMR.peekResolvedMethod(Context.VM_CONTEXT).getOffset()));
         }
       }
       generator.generateMagic(asm, m, cm, sd);
@@ -226,8 +228,9 @@ final class BaselineMagic {
       if ((dc != JavaHeader.class) &&
           (dc != ObjectModel.class)
       ){
+        // Octet: Static cloning: Support multiple resolved methods for every method reference.
         if (checkMR.needsDynamicLink(cm)) {
-          BaselineCompilerImpl.emitDynamicLinkingSequence(asm, S0, checkMR, true);
+          BaselineCompilerImpl.emitDynamicLinkingSequence(asm, S0, checkMR, true, Context.VM_CONTEXT);
           if (offset.NE(NO_SLOT)) {
             asm.emitMOV_Reg_RegDisp(T0, SP, offset);
           } else {
@@ -242,7 +245,7 @@ final class BaselineMagic {
             asm.emitMOV_Reg_RegInd(T0, SP);
           }
           asm.emitPUSH_Reg(T0);
-          asm.emitCALL_Abs(Magic.getTocPointer().plus(checkMR.peekResolvedMethod().getOffset()));
+          asm.emitCALL_Abs(Magic.getTocPointer().plus(checkMR.peekResolvedMethod(Context.VM_CONTEXT).getOffset()));
         }
       }
     }

@@ -12,50 +12,69 @@
  */
 package org.jikesrvm.scheduler;
 
+import static org.jikesrvm.ia32.StackframeLayoutConstants.INVISIBLE_METHOD_ID;
+import static org.jikesrvm.ia32.StackframeLayoutConstants.STACKFRAME_METHOD_ID_OFFSET;
+import static org.jikesrvm.ia32.StackframeLayoutConstants.STACKFRAME_RETURN_ADDRESS_OFFSET;
+import static org.jikesrvm.ia32.StackframeLayoutConstants.STACKFRAME_SENTINEL_FP;
+import static org.jikesrvm.ia32.StackframeLayoutConstants.STACK_SIZE_GUARD;
+import static org.jikesrvm.ia32.StackframeLayoutConstants.STACK_SIZE_NORMAL;
+import static org.jikesrvm.runtime.SysCall.sysCall;
+
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 
+import org.jikesrvm.ArchitectureSpecific;
+import org.jikesrvm.ArchitectureSpecific.BaselineConstants;
 import org.jikesrvm.ArchitectureSpecific.CodeArray;
 import org.jikesrvm.ArchitectureSpecific.Registers;
-import org.jikesrvm.ArchitectureSpecificOpt.PostThreadSwitch;
-import static org.jikesrvm.ArchitectureSpecific.StackframeLayoutConstants.STACK_SIZE_NORMAL;
-import static org.jikesrvm.ArchitectureSpecific.StackframeLayoutConstants.INVISIBLE_METHOD_ID;
-import static org.jikesrvm.ArchitectureSpecific.StackframeLayoutConstants.STACKFRAME_SENTINEL_FP;
-import static org.jikesrvm.ArchitectureSpecific.StackframeLayoutConstants.STACK_SIZE_GUARD;
-import static org.jikesrvm.ArchitectureSpecific.StackframeLayoutConstants.STACKFRAME_METHOD_ID_OFFSET;
-import static org.jikesrvm.ArchitectureSpecific.StackframeLayoutConstants.STACKFRAME_RETURN_ADDRESS_OFFSET;
-import org.jikesrvm.ArchitectureSpecific.BaselineConstants;
-import org.jikesrvm.ArchitectureSpecific.ThreadLocalState;
 import org.jikesrvm.ArchitectureSpecific.StackframeLayoutConstants;
-import org.jikesrvm.ArchitectureSpecific;
-import org.jikesrvm.Constants;
-import org.jikesrvm.VM;
+import org.jikesrvm.ArchitectureSpecific.ThreadLocalState;
+import org.jikesrvm.ArchitectureSpecificOpt.PostThreadSwitch;
 import org.jikesrvm.Configuration;
+import org.jikesrvm.Constants;
 import org.jikesrvm.Services;
 import org.jikesrvm.UnimplementedError;
+import org.jikesrvm.VM;
+import org.jikesrvm.adaptive.OSRListener;
 import org.jikesrvm.adaptive.OnStackReplacementEvent;
 import org.jikesrvm.adaptive.measurements.RuntimeMeasurements;
+import org.jikesrvm.classloader.MemberReference;
+import org.jikesrvm.classloader.NormalMethod;
+import org.jikesrvm.classloader.RVMMethod;
+import org.jikesrvm.compilers.baseline.BaselineCompiledMethod;
 import org.jikesrvm.compilers.common.CompiledMethod;
 import org.jikesrvm.compilers.common.CompiledMethods;
-import org.jikesrvm.osr.ObjectHolder;
-import org.jikesrvm.adaptive.OSRListener;
+import org.jikesrvm.compilers.opt.runtimesupport.OptCompiledMethod;
+import org.jikesrvm.compilers.opt.runtimesupport.OptEncodedCallSiteTree;
+import org.jikesrvm.compilers.opt.runtimesupport.OptMachineCodeMap;
 import org.jikesrvm.jni.JNIEnvironment;
 import org.jikesrvm.mm.mminterface.CollectorThread;
 import org.jikesrvm.mm.mminterface.MemoryManager;
 import org.jikesrvm.mm.mminterface.ThreadContext;
 import org.jikesrvm.objectmodel.ObjectModel;
 import org.jikesrvm.objectmodel.ThinLockConstants;
+import org.jikesrvm.octet.Communication;
+import org.jikesrvm.octet.Octet;
+import org.jikesrvm.octet.OctetState;
+import org.jikesrvm.octet.Stats;
+import org.jikesrvm.osr.ObjectHolder;
+import org.jikesrvm.runtime.BootRecord;
 import org.jikesrvm.runtime.Entrypoints;
 import org.jikesrvm.runtime.Magic;
 import org.jikesrvm.runtime.Memory;
 import org.jikesrvm.runtime.RuntimeEntrypoints;
 import org.jikesrvm.runtime.Time;
-import org.jikesrvm.runtime.BootRecord;
-import org.vmmagic.pragma.Inline;
+import org.jikesrvm.tuningfork.Feedlet;
+import org.jikesrvm.tuningfork.TraceEngine;
+import org.jikesrvm.velodrome.Transaction;
+import org.jikesrvm.velodrome.Velodrome;
+import org.jikesrvm.velodrome.VelodromeMetadataHelper;
 import org.vmmagic.pragma.BaselineNoRegisters;
 import org.vmmagic.pragma.BaselineSaveLSRegisters;
 import org.vmmagic.pragma.Entrypoint;
+import org.vmmagic.pragma.Inline;
 import org.vmmagic.pragma.Interruptible;
+import org.vmmagic.pragma.NoCheckStore;
 import org.vmmagic.pragma.NoInline;
 import org.vmmagic.pragma.NoOptCompile;
 import org.vmmagic.pragma.NonMoving;
@@ -64,20 +83,10 @@ import org.vmmagic.pragma.UninterruptibleNoWarn;
 import org.vmmagic.pragma.Unpreemptible;
 import org.vmmagic.pragma.UnpreemptibleNoWarn;
 import org.vmmagic.pragma.Untraced;
-import org.vmmagic.pragma.NoCheckStore;
 import org.vmmagic.unboxed.Address;
-import org.vmmagic.unboxed.Word;
+import org.vmmagic.unboxed.ObjectReference;
 import org.vmmagic.unboxed.Offset;
-
-import static org.jikesrvm.runtime.SysCall.sysCall;
-import org.jikesrvm.classloader.RVMMethod;
-import org.jikesrvm.compilers.opt.runtimesupport.OptCompiledMethod;
-import org.jikesrvm.compilers.opt.runtimesupport.OptMachineCodeMap;
-import org.jikesrvm.compilers.opt.runtimesupport.OptEncodedCallSiteTree;
-import org.jikesrvm.classloader.MemberReference;
-import org.jikesrvm.classloader.NormalMethod;
-import org.jikesrvm.tuningfork.TraceEngine;
-import org.jikesrvm.tuningfork.Feedlet;
+import org.vmmagic.unboxed.Word;
 
 /**
  * A generic java thread's execution context.
@@ -151,6 +160,7 @@ import org.jikesrvm.tuningfork.Feedlet;
  * @see org.jikesrvm.adaptive.measurements.organizers.Organizer
  */
 @Uninterruptible
+// Octet: RVMThreads will actually be allocated into immortal space (see MemoryManager.pickAllocator* methods); see RVMThread.octetThreads
 @NonMoving
 public final class RVMThread extends ThreadContext implements Constants {
   /*
@@ -498,7 +508,8 @@ public final class RVMThread extends ThreadContext implements Constants {
   /**
    * FP for current frame, saved in the prologue of every method
    */
-  Address framePointer;
+  // Octet: made public for debugging purposes
+  public Address framePointer;
 
   /**
    * "hidden parameter" for interface invocation thru the IMT
@@ -902,6 +913,14 @@ public final class RVMThread extends ThreadContext implements Constants {
    */
   boolean hasInterrupt;
 
+  // Octet: Helps ensure takeYieldpoint and octetRequests are on the same cache line.
+  // There's an assertion below that checks that they are indeed on same cache line (actually the same aligned 8 bytes).
+  public int padding;
+  
+  // Velodrome: The assertion that takeYieldpoint and octetRequests are on the same cache line fails
+  private int dummy;
+
+  
   /**
    * Should the next executed yieldpoint be taken? Can be true for a variety of
    * reasons. See RVMThread.yieldpoint
@@ -926,6 +945,58 @@ public final class RVMThread extends ThreadContext implements Constants {
    */
   @Entrypoint
   public int takeYieldpoint;
+
+  // Octet: per-thread variables
+
+  /** Other threads communicate by modifying this variable.  */
+  @Entrypoint
+  public Word octetRequests;
+
+  /** The number of communication requests responded to. */
+  // Octet: TODO: should this be on a separate cache line?
+  public int octetResponses;
+  
+  /** Thread-local storage for the responding threads that were sent requests. */
+  public final RVMThread[] octetRespondingThreads;
+
+  /** Thread-local storage for the values of remote threads' request counters. */
+  public final int[] octetRespondingThreadCounters;
+  
+  /** The next element in a request queue.  The index used is the thread ID for the thread that owns the request queue. */
+  public final int[] nextRequestQueueThread = Octet.getConfig().doCommunication() && Octet.getClientAnalysis().needsCommunicationQueue() ? new int[MAX_THREADS] : null;
+
+  /** How many calls have blocked communication requests (allows re-entrant blocking)? */
+  public int octetBlockedCommunicationRequestDepth;
+  
+  /** Latest value of the global read-shared counter that's been received by this thread when reading a read-shared object */
+  public Word octetReadSharedCounter = OctetState.MAX_READ_SHARED;
+  
+  /** a pthread monitor to use for waiting */
+  public final Word octetMonitor = VM.runningVM ? sysCall.sysMonitorCreate() : Word.zero();
+  
+  // provide a unique thread ID for Octet threads only
+  public final int octetThreadID;
+  
+  /** next CPU ID to be bound to an Octet thread */
+  private static int nextCPUID = 0;
+
+  // Velodrome: Thread-local variable declarations 
+  /** Keeps track of the level of nesting of synchronized blocks/transactions */
+  private boolean isInTransaction;
+  /** Tracks the number of nodes (transactions) created for a thread, also doubles up the as unique 
+   * (per-thread) id generator for transactions */
+  // Should not matter if this starts from zero
+  public int numberOfNodes; 
+  /** Keep track of the last node in the graph, which also doubles up as the current transaction */
+  public Transaction currentTransaction;  
+  /** Monitor to serialize cycle detection */
+  public static Monitor velodromeCycleLock;
+  /** Monitor to atomically increment edge counter */ 
+  public static Monitor velodromeEdgeCounterLock;
+  /** Monitor to atomically print information */
+  public static Monitor velodromeOutputLock;
+  public boolean betweenPreAndPost;
+  public Word lockedMetadata;
 
   /**
    * How many times has the "timeslice" expired? This is only used for profiling
@@ -1065,6 +1136,9 @@ public final class RVMThread extends ThreadContext implements Constants {
   /** Lock used for dumping stack and such. */
   public static Monitor dumpLock;
 
+  /** Octet: special lock for Octet debugging output */
+  public static Monitor octetDumpLock; 
+  
   /** In dump stack and dying */
   protected static boolean exitInProgress = false;
 
@@ -1084,6 +1158,13 @@ public final class RVMThread extends ThreadContext implements Constants {
 
   public static final int MAX_THREADS = 1 << LOG_MAX_THREADS;
 
+  /** Octet: array of all Octet threads, including those that have died.  Note that in Octet, RVMThread objects will die (become unreachable)
+      but the RVMThread object itself will still be kept in the heap.  Thus, you can use fields of, but don't expect reference fields
+      to point to anything.  This weird hack allows us to deal with the fact that WrEx/RdEx states might point to threads that have died. */
+  //@Untraced // because RVMThreads will never move and they'll never be collected, but we want *objects pointed to* by an RVMThread to be able to die
+  //public static final RVMThread[] octetThreads = new RVMThread[MAX_THREADS]; // might overflow because IDs are not reused
+  private static int nextOctetThreadID;
+  
   /**
    * thread array - all threads are stored in this array according to their
    * threadSlot.
@@ -1312,6 +1393,20 @@ public final class RVMThread extends ThreadContext implements Constants {
         VM.sysWriteln("binding thread to CPU: ",VM.forceOneCPU);
       }
       bind(VM.forceOneCPU);
+    // Octet: Support binding Octet threads to cores
+    } else if (VM.octetForceHardAffinity && RVMThread.getCurrentThread().isOctetThread()) {
+      int cpuID;
+      acctLock.lockNoHandshake();
+      cpuID = nextCPUID;
+      nextCPUID++;
+      if (nextCPUID == RVMThread.availableProcessors) {
+        nextCPUID = 0;
+      }
+      acctLock.unlock();
+      if (traceBind) {
+        VM.sysWriteln("binding thread to CPU: ", cpuID);
+      }
+      bind(cpuID);
     }
   }
 
@@ -1323,6 +1418,14 @@ public final class RVMThread extends ThreadContext implements Constants {
   public static void boot() {
     outOfMemoryError = new OutOfMemoryError();
     dumpLock = new Monitor();
+    // Octet: initialize output lock
+    octetDumpLock = new Monitor();
+
+    // Velodrome: Initialize the cycle lock
+    velodromeCycleLock = new Monitor();
+    velodromeEdgeCounterLock = new Monitor();
+    velodromeOutputLock = new Monitor();
+
     acctLock = new NoYieldpointsMonitor();
     debugLock = new NoYieldpointsMonitor();
     outputLock = new NoYieldpointsMonitor();
@@ -1596,7 +1699,50 @@ public final class RVMThread extends ThreadContext implements Constants {
         // create wrapper Thread if doesn't exist
         this.thread = java.lang.JikesRVMSupport.createThread(this, name);
       }
+      
+      // Octet: make sure that takeYieldpoint and octetRequest are on the same cache line.
+      // For now, we'll just make sure they're in the same aligned 8 bytes
+      if (VM.VerifyAssertions) {
+        Word baseAddr = ObjectReference.fromObject(this).toAddress().toWord();
+        Word addr1 = baseAddr.plus(Entrypoints.takeYieldpointField.getOffset());
+        Word addr2 = baseAddr.plus(Entrypoints.octetRequestsField.getOffset());
+        VM._assert((addr1.toInt() & ~0x07) == (addr2.toInt() & ~0x7)); // make sure high 29 bits match
+      }
     }
+
+    // Octet: assign a thread ID that's only for Octet threads and that's also unique.
+    // Octet threads are non-system threads plus the finalizer thread.
+    if (systemThread == null || systemThread instanceof FinalizerThread) {
+      acctLock.lockNoHandshake();
+      octetThreadID = nextOctetThreadID++;
+      //octetThreads[octetThreadID] = this;
+      acctLock.unlock();
+      octetRespondingThreads = new RVMThread[MAX_THREADS];
+      octetRespondingThreadCounters = new int[MAX_THREADS];
+      if (Octet.verbosity >= 2) {
+        octetDumpLock.lockNoHandshake();
+        VM.sysWriteln("T", octetThreadID, " (threadSlot=", threadSlot, ") started by T", RVMThread.getCurrentThread().octetThreadID);
+        octetDumpLock.unlock();
+      }
+    } else {
+      octetThreadID = -1;
+      octetRespondingThreads = null;
+      octetRespondingThreadCounters = null;
+    }
+
+    // Velodrome: Initialize variables
+    isInTransaction = false;
+    numberOfNodes = Velodrome.START_TRANSACTION_ID; // Should not matter if this starts from zero
+    if (isOctetThread()) {
+      MemoryManager.startAllocatingInUninterruptibleCode();
+      currentTransaction = new Transaction(this, false, /*incomingEdge = */ -1);
+      MemoryManager.stopAllocatingInUninterruptibleCode();
+    } else {
+      currentTransaction = null;
+    }
+    betweenPreAndPost = false;
+    lockedMetadata = Word.zero();
+    
   }
 
   /**
@@ -2039,6 +2185,13 @@ public final class RVMThread extends ThreadContext implements Constants {
     if (traceBlock)
       VM.sysWriteln("Thread #", getCurrentThread().threadSlot,
           " is requesting that thread #", threadSlot, " blocks.");
+    
+    // Octet: block communication requests
+    if (Octet.getConfig().doCommunication()) {
+      Stats.blockCommThreadBlock.inc();
+      Communication.blockCommunicationRequests(true);
+    }
+
     monitor().lockNoHandshake();
     int token = ba.requestBlock(this);
     if (getCurrentThread() == this) {
@@ -2118,6 +2271,12 @@ public final class RVMThread extends ThreadContext implements Constants {
       }
     }
     monitor().unlock();
+    
+    // Octet: unblock communication requests
+    if (Octet.getConfig().doCommunication()) {
+      Communication.unblockCommunicationRequests();
+    }
+
     if (traceReallyBlock)
       VM.sysWriteln("Thread #", getCurrentThread().threadSlot,
           " is done telling thread #", threadSlot, " to block.");
@@ -2156,7 +2315,25 @@ public final class RVMThread extends ThreadContext implements Constants {
     other.communicationLock().unlock();
     if (traceBlock) VM.sysWriteln("unpairing ",threadSlot," from ",other.threadSlot);
   }
-
+  
+  /** Velodrome: Check whether we are already in a transaction. */
+  @Inline
+  public boolean inTransaction() {
+    return isInTransaction;
+  }  
+  
+  @Inline
+  public void setInTransaction() {
+    if (VM.VerifyAssertions) { VM._assert(!inTransaction()); }
+    isInTransaction = true;
+  }
+  
+  @Inline
+  public void resetInTransaction() {
+    if (VM.VerifyAssertions) { VM._assert(inTransaction()); }
+    isInTransaction = false;
+  }
+  
   @Unpreemptible
   public void beginPairWithCurrent() {
     beginPairWith(getCurrentThread());
@@ -2192,6 +2369,11 @@ public final class RVMThread extends ThreadContext implements Constants {
 
   @Unpreemptible
   public void beginPairHandshake() {
+    // Octet: entering blocked state (seems redundant but might help because beginPairWithCurrent can block) 
+    if (Octet.getConfig().doCommunication()) {
+      Stats.blockCommBeginPairHandshake.inc();
+      Communication.blockCommunicationRequests(true);
+    }
     beginPairWithCurrent();
     block(handshakeBlockAdapter);
   }
@@ -2200,6 +2382,11 @@ public final class RVMThread extends ThreadContext implements Constants {
   public void endPairHandshake() {
     unblock(handshakeBlockAdapter);
     endPairWithCurrent();
+    
+    // Octet: leaving blocked state
+    if (Octet.getConfig().doCommunication()) {
+      Communication.unblockCommunicationRequests();
+    }
   }
 
   /**
@@ -2241,6 +2428,13 @@ public final class RVMThread extends ThreadContext implements Constants {
         } else {
           t.assertAcceptableStates(IN_JAVA_TO_BLOCK);
           t.enterNativeBlocked();
+          
+          // Octet: enter blocked state
+          if (Octet.getConfig().doCommunication()) {
+            Stats.blockCommEnterNative.inc();
+            Communication.blockCommunicationRequests(true);
+          }
+
           return;
         }
       } while (!(t.attemptFastExecStatusTransition(oldState, newState)));
@@ -2250,6 +2444,11 @@ public final class RVMThread extends ThreadContext implements Constants {
     // set it to whatever they want.
     //if (VM.VerifyAssertions)
     //  VM._assert(t.execStatus == IN_NATIVE);
+    
+    // Octet: enter blocked state
+    if (Octet.getConfig().doCommunication()) {
+      Communication.blockCommunicationRequests(true);
+    }
   }
 
   /**
@@ -2272,6 +2471,12 @@ public final class RVMThread extends ThreadContext implements Constants {
         return false;
       }
     } while (!(t.attemptFastExecStatusTransition(oldState, newState)));
+    
+    // Octet: unblock communication requests (only if we're succeeding)
+    if (Octet.getConfig().doCommunication()) {
+      Communication.unblockCommunicationRequests();
+    }
+
     return true;
   }
 
@@ -2289,6 +2494,11 @@ public final class RVMThread extends ThreadContext implements Constants {
             " is leaving native blocked");
       }
       getCurrentThread().leaveNativeBlocked();
+
+      // Octet: unblock communication requests (only needed if attemptLeaveNativeNoBlock() returns false)
+      if (Octet.getConfig().doCommunication()) {
+        Communication.unblockCommunicationRequests();
+      }
     }
   }
 
@@ -2298,6 +2508,12 @@ public final class RVMThread extends ThreadContext implements Constants {
     if (!getCurrentThread().attemptFastExecStatusTransition(RVMThread.IN_JAVA,
         RVMThread.IN_JNI)) {
       RVMThread.enterJNIBlockedFromCallIntoNative();
+    }
+    
+    // Octet: enter blocked state
+    if (Octet.getConfig().doCommunication()) {
+      Stats.blockCommEnterJNIFromCallIntoNative.inc();
+      Communication.blockCommunicationRequests(true);
     }
   }
 
@@ -2309,6 +2525,11 @@ public final class RVMThread extends ThreadContext implements Constants {
         RVMThread.IN_JAVA)) {
       RVMThread.leaveJNIBlockedFromCallIntoNative();
     }
+    
+    // Octet: leave blocked state
+    if (Octet.getConfig().doCommunication()) {
+      Communication.unblockCommunicationRequests();
+    }
   }
 
   public static void enterJNIFromJNIFunctionCall() {
@@ -2318,6 +2539,12 @@ public final class RVMThread extends ThreadContext implements Constants {
     if (!getCurrentThread().attemptFastExecStatusTransition(RVMThread.IN_JAVA,
         RVMThread.IN_JNI)) {
       RVMThread.enterJNIBlockedFromJNIFunctionCall();
+    }
+    
+    // Octet: enter blocked state
+    if (Octet.getConfig().doCommunication()) {
+      Stats.blockCommEnterJNIFromJNIFunctionCall.inc();
+      Communication.blockCommunicationRequests(true);
     }
   }
 
@@ -2329,6 +2556,11 @@ public final class RVMThread extends ThreadContext implements Constants {
     if (!getCurrentThread().attemptFastExecStatusTransition(RVMThread.IN_JNI,
         RVMThread.IN_JAVA)) {
       RVMThread.leaveJNIBlockedFromJNIFunctionCall();
+    }
+    
+    // Octet: leave blocked state
+    if (Octet.getConfig().doCommunication()) {
+      Communication.unblockCommunicationRequests();
     }
   }
 
@@ -2356,6 +2588,15 @@ public final class RVMThread extends ThreadContext implements Constants {
         asyncDebugRequestedForThisThread = true;
         takeYieldpoint = 1;
         VM.sysWriteln("(stack trace will follow if thread is not lost...)");
+
+        // Velodrome: Debugging why Jikes gets stuck
+        RVMThread.dumpStack(this.framePointer);
+        
+        // Octet: Force printing of stack trace.
+        // Octet: TODO: It would be better to wait and print only the stacks
+        // for threads that can't reach a yield point on their own.
+        Stats.tryToPrintStack(this.framePointer);
+        
       } else {
         if (contextRegisters != null) {
           dumpStack(contextRegisters.getInnermostFramePointer());
@@ -2455,6 +2696,12 @@ public final class RVMThread extends ThreadContext implements Constants {
    */
   public static int getCurrentThreadSlot() {
     return getCurrentThread().threadSlot;
+  }
+  
+  // Velodrome: Adding a helper method
+  /** Get the thread slot for a given thread */
+  public int getGivenThreadSlot() {
+    return this.threadSlot;
   }
 
   /**
@@ -2601,6 +2848,15 @@ public final class RVMThread extends ThreadContext implements Constants {
       VM.sysWriteln("Thread.startoff(): about to call ", currentThread.toString(), ".run()");
     }
 
+    // Octet: Update count of live threads.  This stat is unsynchronized, so it needs to execute while acctLock is held
+    if (currentThread.isOctetThread()) {
+      if (Octet.getConfig().stats()) {
+        acctLock.lockNoHandshake();
+        Stats.threadsLive.inc();
+        acctLock.unlock();
+      }
+    }
+
     try {
       if (currentThread.systemThread != null) {
         currentThread.systemThread.run();
@@ -2657,6 +2913,12 @@ public final class RVMThread extends ThreadContext implements Constants {
       VM.enableGC();
     }
 
+    // Octet: handle Octet and client-specfic thread termination
+    if (VM.VerifyAssertions) { VM._assert(this == RVMThread.getCurrentThread()); }
+    if (isOctetThread()) {
+      Octet.getClientAnalysis().handleThreadTerminationEarly();
+    }
+    
     // allow java.lang.Thread.exit() to remove this thread from ThreadGroup
     java.lang.JikesRVMSupport.threadDied(thread);
 
@@ -2672,6 +2934,11 @@ public final class RVMThread extends ThreadContext implements Constants {
     if (traceAcct)
       VM.sysWriteln("doing accounting...");
     acctLock.lockNoHandshake();
+
+    // Octet: Thread accounting.  This stat is unsynchronized, so it needs to execute while acctLock is held.
+    if (isOctetThread()) {
+      Stats.threadsLive.dec();
+    }
 
     // if the thread terminated because of an exception, remove
     // the mark from the exception register object, or else the
@@ -2782,6 +3049,13 @@ public final class RVMThread extends ThreadContext implements Constants {
    */
   @Unpreemptible
   private void terminateUnpreemptible() {
+    
+    // Octet: handle Octet and client-specfic thread termination
+    if (VM.VerifyAssertions) { VM._assert(this == RVMThread.getCurrentThread()); }
+    if (isOctetThread()) {
+      Octet.getClientAnalysis().handleThreadTerminationLate();
+    }
+
     // return cached free lock
     if (traceAcct)
       VM.sysWriteln("returning cached lock...");
@@ -3191,6 +3465,15 @@ public final class RVMThread extends ThreadContext implements Constants {
         // is this where the problem is coming from?
         toAwaken.monitor().lockedBroadcastNoHandshake();
       }
+      
+      // Velodrome: Tracking Thread::wait()
+      if (Velodrome.trackThreadSynchronizationPrimitives()) { 
+        if (VM.VerifyAssertions) { VM._assert(Velodrome.addMiscHeader()); }
+        if (RVMThread.getCurrentThread().isOctetThread()) {
+          VelodromeMetadataHelper.trackLockAcquire(o);
+        }
+      }
+
       // block
       monitor().lockNoHandshake();
       while (l.waiting.isQueued(this) && !hasInterrupt && asyncThrowable == null &&
@@ -3309,6 +3592,15 @@ public final class RVMThread extends ThreadContext implements Constants {
     if (owner != me) {
       raiseIllegalMonitorStateException("notifying (expected lock to be held by "+me+"("+getCurrentThread().getLockingId()+") but was held by "+owner+"("+l.getOwnerId()+")) ", o);
     }
+    
+    // Velodrome: Tracking Thread::notify()
+    if (Velodrome.trackThreadSynchronizationPrimitives()) { 
+      if (VM.VerifyAssertions) { VM._assert(Velodrome.addMiscHeader()); }
+      if (RVMThread.getCurrentThread().isOctetThread()) {
+        VelodromeMetadataHelper.trackLockRelease(o);
+      }
+    }
+
     l.mutex.lock();
     RVMThread toAwaken = l.waiting.dequeue();
     l.mutex.unlock();
@@ -3336,6 +3628,15 @@ public final class RVMThread extends ThreadContext implements Constants {
     if (owner != getCurrentThread().getLockingId()) {
       raiseIllegalMonitorStateException("notifying all (expected lock to be held by "+getCurrentThread().getLockingId()+" but was held by "+l.getOwnerId()+") ", o);
     }
+    
+    // Velodrome: Tracking Thread::notifyAll()
+    if (Velodrome.trackThreadSynchronizationPrimitives()) { 
+      if (VM.VerifyAssertions) { VM._assert(Velodrome.addMiscHeader()); }
+      if (RVMThread.getCurrentThread().isOctetThread()) {
+        VelodromeMetadataHelper.trackLockRelease(o);
+      }
+    }
+
     for (;;) {
       l.mutex.lock();
       RVMThread toAwaken = l.waiting.dequeue();
@@ -3923,10 +4224,22 @@ public final class RVMThread extends ThreadContext implements Constants {
     int takeYieldpointVal = t.takeYieldpoint;
     if (takeYieldpointVal != 0) {
       t.takeYieldpoint = 0;
+      
+      // Octet: check for communication requests and also block them until after checkBlock below
+      if (Octet.getConfig().doCommunication()) {
+        Stats.blockCommYieldpoint.inc();
+        Communication.blockCommunicationRequests(true);
+      }
+
       // do two things: check if we should be blocking, and act upon
       // handshake requests. This also has the effect of reasserting that
       // we are in fact IN_JAVA (as opposed to IN_JAVA_TO_BLOCK).
       t.checkBlock();
+      
+      // Octet: unblock communication requests
+      if (Octet.getConfig().doCommunication()) {
+        Communication.unblockCommunicationRequests();
+      }
 
       // Process timer interrupt event
       if (t.timeSliceExpired != 0) {
@@ -4351,6 +4664,11 @@ public final class RVMThread extends ThreadContext implements Constants {
     return systemThread != null;
   }
 
+  // Octet: is this a thread that Octet cares about?
+  public final boolean isOctetThread() {
+    return octetThreadID >= 0;
+  }
+
   /** Get the collector thread this RVMTHread is running */
   public CollectorThread getCollectorThread() {
     if (VM.VerifyAssertions) VM._assert(isCollectorThread());
@@ -4524,6 +4842,9 @@ public final class RVMThread extends ThreadContext implements Constants {
       VM._assert(myThread != this);
     if (traceBlock)
       VM.sysWriteln("Joining on Thread #", threadSlot);
+    
+    // Velodrome: We do not track join() since it calls wait()
+    
     // this uses synchronized because we cannot have one thread acquire
     // another thread's lock using the WithHandshake scheme, as that would result
     // in a thread holding two threads' monitor()s.  using synchronized
@@ -4765,6 +5086,8 @@ public final class RVMThread extends ThreadContext implements Constants {
   public void extDump() {
     dump();
     VM.sysWriteln();
+    // Velodrome: Printing thread name
+    VM.sysWriteln("Thread Name: ", RVMThread.getCurrentThread().name);
     VM.sysWriteln("acquireCount for my monitor: ", monitor().acquireCount);
     VM.sysWriteln("yieldpoints taken: ", yieldpointsTaken);
     VM.sysWriteln("yieldpoints taken fully: ", yieldpointsTakenFully);
@@ -4863,6 +5186,11 @@ public final class RVMThread extends ThreadContext implements Constants {
     }
     if (isCollectorThread()) {
       offset = Services.sprintf(dest, offset, "-collector"); // gc thread?
+    }
+    // Velodrome: Debug information
+    if (isOctetThread()) {
+      offset = Services.sprintf(dest, offset, "-octet#"); // Octet (application + finalizer) thread
+      offset = Services.sprintf(dest, offset, this.octetThreadID); // Octet (application + finalizer) thread
     }
     offset = Services.sprintf(dest, offset, "-");
     offset = Services.sprintf(dest, offset, getExecStatus());
@@ -5030,23 +5358,30 @@ public final class RVMThread extends ThreadContext implements Constants {
     }
   }
 
+  // Velodrome: Debugging changes
   static void tracebackWithoutLock() {
     if (VM.runningVM) {
-      VM.sysWriteln("Thread #", getCurrentThreadSlot());
+      VM.sysWrite("Thread #", getCurrentThreadSlot());
+      VM.sysWriteln(" Octet Thread ID:", getCurrentThread().octetThreadID);
       dumpStack(Magic.getCallerFramePointer(Magic.getFramePointer()));
     } else {
       dumpStack();
     }
   }
 
+  // Velodrome: Debugging changes
   /**
    * Dump stack of calling thread, starting at callers frame
    */
   @UninterruptibleNoWarn("Never blocks")
   public static void dumpStack() {
     if (VM.runningVM) {
-      VM.sysWriteln("Dumping stack for Thread #", getCurrentThreadSlot());
+      VM.sysWrite("Dumping stack for Thread #", getCurrentThreadSlot());
+      // Velodrome: Printing additional debugging information
+      VM.sysWrite(", Octet Thread ID:", getCurrentThread().octetThreadID);
+      VM.sysWriteln(", Current thread transaction depth:", getCurrentThread().inTransaction());
       dumpStack(Magic.getFramePointer());
+      VM.sysWriteln(); // Velodrome: Added this to format the output better
     } else {
       StackTraceElement[] elements = (new Throwable(
           "--traceback from Jikes RVM's RVMThread class--")).getStackTrace();
@@ -5070,6 +5405,8 @@ public final class RVMThread extends ThreadContext implements Constants {
     fp = Magic.getCallerFramePointer(fp);
     dumpStack(ip, fp);
   }
+
+  // Octet: Added printing of bytecode indices below.
 
   /**
    * Dump state of a (stopped) thread's stack.
@@ -5139,9 +5476,10 @@ public final class RVMThread extends ThreadContext implements Constants {
                     int bci = map.getBytecodeIndexForMCOffset(instructionOffset);
                     for (; iei >= 0; iei = OptEncodedCallSiteTree.getParent(iei, inlineEncoding)) {
                       int mid = OptEncodedCallSiteTree.getMethodID(iei, inlineEncoding);
-                      method = MemberReference.getMemberRef(mid).asMethodReference().getResolvedMember();
+                      // Octet: Static cloning: Support multiple resolved methods for every method reference.
+                      method = MemberReference.getMemberRef(mid).asMethodReference().getResolvedMember(compiledMethod.getMethod().getStaticContext());
                       lineNumber = ((NormalMethod) method).getLineNumberForBCIndex(bci);
-                      showMethod(method, lineNumber, fp);
+                      showMethod(method, lineNumber, bci, fp);
                       if (iei > 0) {
                         bci = OptEncodedCallSiteTree.getByteCodeOffset(iei, inlineEncoding);
                       }
@@ -5150,7 +5488,11 @@ public final class RVMThread extends ThreadContext implements Constants {
                   }
                 }
                 if (!frameShown) {
-                  showMethod(method, lineNumber, fp);
+                  int bci = -1;
+                  if (compiledMethod.getCompilerType() == CompiledMethod.BASELINE) {
+                    bci = ((BaselineCompiledMethod)compiledMethod).findBytecodeIndexForInstruction(instructionOffset);
+                  }
+                  showMethod(method, lineNumber, bci, fp);
                 }
               }
             }
@@ -5240,7 +5582,7 @@ public final class RVMThread extends ThreadContext implements Constants {
    * Helper function for {@link #dumpStack(Address,Address)}. Print a stack
    * frame showing the method.
    */
-  private static void showMethod(RVMMethod method, int lineNumber, Address fp) {
+  private static void showMethod(RVMMethod method, int lineNumber, int bci, Address fp) {
     showPrologue(fp);
     if (method == null) {
       VM.sysWrite("<unknown method>");
@@ -5254,7 +5596,8 @@ public final class RVMThread extends ThreadContext implements Constants {
       VM.sysWrite(" at line ");
       VM.sysWriteInt(lineNumber);
     }
-    VM.sysWrite("\n");
+    VM.sysWrite(" (at bci ", bci);
+    VM.sysWrite(")\n");
   }
 
   /**
@@ -5345,6 +5688,8 @@ public final class RVMThread extends ThreadContext implements Constants {
         if (thr.contextRegisters != null && !thr.ignoreHandshakesAndGC())
           dumpStack(thr.contextRegisters.getInnermostFramePointer());
       }
+      // Velodrome: Adding new line for better formatting
+      VM.sysWriteln();
     }
     getCurrentThread().enableYieldpoints();
     Monitor.unlock(b, dumpLock);
@@ -5409,4 +5754,22 @@ public final class RVMThread extends ThreadContext implements Constants {
     sloppyExecStatusHistogram[oldState]++;
     sloppyExecStatusHistogram[newState]++;
   }
+  
+  // Velodrome: Adding debug method to dump only Octet threads
+  public static void dumpOctetThreads() {
+    octetDumpLock.lockNoHandshake();
+    // Scan RVMThread.threads (scan down so we don't miss anything), see comment for threads[]
+    for (int i = RVMThread.numThreads-1; i >= 0; i--) {
+      Magic.sync();
+      RVMThread t = RVMThread.threads[i];
+      if (t.isOctetThread()) {
+        t.dump();
+        if (t.contextRegisters != null && !t.ignoreHandshakesAndGC())
+          dumpStack(t.contextRegisters.getInnermostFramePointer());
+        VM.sysWriteln();
+      }
+    }
+    octetDumpLock.unlock();
+  }
+  
 }

@@ -15,7 +15,6 @@ package org.jikesrvm.mm.mminterface;
 import java.lang.ref.PhantomReference;
 import java.lang.ref.SoftReference;
 import java.lang.ref.WeakReference;
-
 import org.jikesrvm.ArchitectureSpecific.CodeArray;
 import org.jikesrvm.VM;
 import org.jikesrvm.HeapLayoutConstants;
@@ -36,9 +35,11 @@ import org.jikesrvm.objectmodel.JavaHeader;
 import org.jikesrvm.objectmodel.ObjectModel;
 import org.jikesrvm.objectmodel.TIB;
 import org.jikesrvm.objectmodel.TIBLayoutConstants;
+import org.jikesrvm.octet.Octet;
 import org.jikesrvm.options.OptionSet;
 import org.jikesrvm.runtime.BootRecord;
 import org.jikesrvm.runtime.Magic;
+import org.jikesrvm.scheduler.RVMThread;
 import org.mmtk.plan.CollectorContext;
 import org.mmtk.plan.Plan;
 import org.mmtk.policy.Space;
@@ -457,6 +458,11 @@ public final class MemoryManager implements HeapLayoutConstants, Constants {
         isPrefix("Lorg/jikesrvm/mm/", typeBA) || isPrefix("[Lorg/jikesrvm/mm/", typeBA) ||
         isPrefix("Lorg/jikesrvm/jni/JNIEnvironment;", typeBA)) {
       allocator = Plan.ALLOC_NON_MOVING;
+    }
+    // Octet: Need threads to go in the immortal space so their space won't get reused.  This allows
+    // GC to avoid the alternative, tracing each thread's extra header word.
+    if (Octet.getConfig().instrumentAllocation() && isPrefix("Lorg/jikesrvm/scheduler/RVMThread;", typeBA)) {
+      allocator = Plan.ALLOC_IMMORTAL;
     }
     return allocator;
   }
@@ -1107,6 +1113,29 @@ public final class MemoryManager implements HeapLayoutConstants, Constants {
     return new SpecializedScanMethod(id, TypeReference.findOrCreate(traceClass));
   }
 
+  /** Octet: support allocation in uninterruptible code */
+  public static final void startAllocatingInUninterruptibleCode() {
+    RVMThread.getCurrentThread().disableYieldpoints();
+    Selected.Mutator.get().startAllocatingInUninterruptibleCode();
+  }
+  
+  /** Octet: support allocation in uninterruptible code */
+  public static final void stopAllocatingInUninterruptibleCode() {
+    RVMThread.getCurrentThread().enableYieldpoints();
+    Selected.Mutator.get().stopAllocatingInUninterruptibleCode();
+  }
+  
+  /** Octet: check whether the "allocating in uninterruptible code" flag is set. */
+  public static final boolean isAllocatingInUninterruptibleCode() {
+    return Selected.Mutator.get().isAllocatingInUninterruptibleCode();
+  }
+  
+  /** Octet: are we inside the performance-measuring harness? */
+  @Inline
+  public static final boolean inHarness() {
+    return Plan.insideHarness;
+  }
+  
   /***********************************************************************
    *
    * Header initialization

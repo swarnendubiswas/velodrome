@@ -13,6 +13,7 @@
 package org.jikesrvm.mm.mmtk;
 
 import org.mmtk.policy.ImmortalSpace;
+import org.mmtk.policy.Space;
 import org.mmtk.utility.Constants;
 import org.mmtk.utility.heap.VMRequest;
 
@@ -34,7 +35,10 @@ import org.vmmagic.pragma.*;
   @Override
   protected final Address getHeapEndConstant() { return MAXIMUM_MAPPABLE; }
   @Override
-  protected final Address getAvailableStartConstant() { return BOOT_IMAGE_CODE_END; }
+  // Octet: Changed to reflect the true end of the boot image.  It seems to be a Jikes bug that turns out to be benign (for now).
+  // Octet: TODO: Report (and possibly fix) this Jikes bug.  Also report/fix the related unnecessary dependences between boot image layout values.
+  protected final Address getAvailableStartConstant() { return BOOT_IMAGE_END; }
+  //protected final Address getAvailableStartConstant() { return BOOT_IMAGE_CODE_END; }
   @Override
   protected final Address getAvailableEndConstant() { return MAXIMUM_MAPPABLE; }
   @Override
@@ -58,7 +62,9 @@ import org.vmmagic.pragma.*;
 
   /* FIXME the following was established via trial and error :-( */
   //  private static int BOOT_SEGMENT_MB = 4+(BOOT_IMAGE_SIZE.toInt()>>LOG_BYTES_IN_MBYTE);
-  private static int BOOT_SEGMENT_MB = (0x10000000>>LOG_BYTES_IN_MBYTE);
+  // Octet: Making this space reflect the actual size of the boot image.
+  private static int BOOT_SEGMENT_MB = org.jikesrvm.runtime.Memory.alignUp(BOOT_IMAGE_END.diff(BOOT_IMAGE_DATA_START).toInt(), Space.BYTES_IN_CHUNK) >>> LOG_BYTES_IN_MBYTE;
+  //private static int BOOT_SEGMENT_MB = (0x10000000>>LOG_BYTES_IN_MBYTE);
 
   /**
    * Return the space associated with/reserved for the VM.  In the

@@ -119,7 +119,8 @@ public class InterfaceHierarchy {
     Atom desc = foo.getDescriptor();
 
     for (RVMClass klass : classes) {
-      RVMMethod m = klass.findDeclaredMethod(name, desc);
+      // Octet: Static cloning: Support multiple resolved methods for every method reference.
+      RVMMethod m = klass.findDeclaredMethod(name, desc, foo.getResolvedContext());
       if (firstMethod == null) {
         firstMethod = m;
       }

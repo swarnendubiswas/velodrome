@@ -35,11 +35,16 @@ public interface HeapLayoutConstants {
   Address MAXIMUM_MAPPABLE =
     Address.@_ADDRESS_METHOD_@( @_MAXIMUM_MAPPABLE_ADDRESS_@ );
 
+  // Octet: Now, we no longer need to tinker with HeapLayoutConstants.template file even if we make  
+  // changes to the address ranges in x86_64-linux.properties
+
   /** The maximum boot image data size */
-  int BOOT_IMAGE_DATA_SIZE = 56<<20;
+  int BOOT_IMAGE_DATA_SIZE = (BOOT_IMAGE_CODE_START.diff(BOOT_IMAGE_DATA_START).toInt());
+  //int BOOT_IMAGE_DATA_SIZE = 56<<20;
 
   /** The maximum boot image code size */
-  int BOOT_IMAGE_CODE_SIZE = 24<<20;
+  int BOOT_IMAGE_CODE_SIZE = (BOOT_IMAGE_RMAP_START.diff(BOOT_IMAGE_CODE_START).toInt());
+  //int BOOT_IMAGE_CODE_SIZE = 24<<20;
 
   /* Typical compression ratio is about 1/20 */
   int BAD_MAP_COMPRESSION = 5;  // conservative heuristic

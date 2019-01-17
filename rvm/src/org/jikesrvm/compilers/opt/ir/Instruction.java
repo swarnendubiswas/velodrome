@@ -284,6 +284,15 @@ public final class Instruction implements Constants, Operators, OptConstants {
     if (isGCPoint()) {
       result.setCharAt(1, 'G');
     }
+    // Octet: print instruction properties
+    if (isPossibleSharedMemoryAccess()) {
+      if (VM.VerifyAssertions) { VM._assert(!hasRedundantBarrier()); }
+      // access to potentially shared object
+      result.setCharAt(2, 'S');
+    } else if (hasRedundantBarrier()) {
+      // access to redundant barrier
+      result.setCharAt(2, 'R');
+    }
 
     if (operator == LABEL) {
       result.append("LABEL").append(Label.getBlock(this).block.getNumber());
@@ -1198,6 +1207,33 @@ public final class Instruction implements Constants, Operators, OptConstants {
     if (VM.VerifyAssertions) VM._assert(getOpcode() > MIR_START_opcode);
     operatorInfo &= ~(OI_PEI | OI_GC);
     operatorInfo |= (OI_PEI_VALID | OI_GC_VALID);
+  }
+
+  // Octet: instrumentation selection helper methods
+  
+  /** Mark as an instruction that Octet cares about (non-VM, non-final, non-escaping, non-redundant scalar/array/static access. */
+  public void markAsPossibleSharedMemoryAccess() {
+    setMark1();
+  }
+
+  /** Clear as an instruction that Octet cares about (non-VM, non-final, non-escaping, non-redundant scalar/array/static access. */
+  public void clearAsPossibleSharedMemoryAccess() {
+    clearMark1();
+  }
+
+  /** Is this an instruction that Octet cares about (non-VM, non-final, non-escaping, non-redundant scalar/array/static access? */
+  public boolean isPossibleSharedMemoryAccess() {
+    return isMarked1();
+  }
+
+  /** Mark the instruction as accessing an object that is thread local? */
+  public void markHasRedundantBarrier() {
+    setMark2();
+  }
+  
+  /** Is this an instruction that accesses an object that Octet decided is thread local? */
+  public boolean hasRedundantBarrier() {
+    return isMarked2();
   }
 
   /**

@@ -15,24 +15,26 @@ package org.jikesrvm.compilers.baseline;
 import org.jikesrvm.ArchitectureSpecific.Assembler;
 import org.jikesrvm.ArchitectureSpecific.MachineCode;
 import org.jikesrvm.ArchitectureSpecific.StackframeLayoutConstants;
-import org.jikesrvm.VM;
 import org.jikesrvm.Services;
 import org.jikesrvm.SizeConstants;
-import org.jikesrvm.classloader.ClassLoaderConstants;
-import org.jikesrvm.classloader.RVMArray;
+import org.jikesrvm.VM;
 import org.jikesrvm.classloader.BytecodeConstants;
 import org.jikesrvm.classloader.BytecodeStream;
-import org.jikesrvm.classloader.RVMClass;
+import org.jikesrvm.classloader.ClassLoaderConstants;
+import org.jikesrvm.classloader.Context;
 import org.jikesrvm.classloader.FieldReference;
-import org.jikesrvm.classloader.RVMMethod;
 import org.jikesrvm.classloader.MethodReference;
 import org.jikesrvm.classloader.NormalMethod;
+import org.jikesrvm.classloader.RVMArray;
+import org.jikesrvm.classloader.RVMClass;
+import org.jikesrvm.classloader.RVMMethod;
 import org.jikesrvm.classloader.RVMType;
 import org.jikesrvm.classloader.TypeReference;
 import org.jikesrvm.compilers.common.CompiledMethod;
 import org.jikesrvm.compilers.common.CompiledMethods;
 import org.jikesrvm.compilers.common.assembler.ForwardReference;
 import org.jikesrvm.osr.bytecodes.InvokeStatic;
+import org.jikesrvm.runtime.Entrypoints;
 import org.jikesrvm.runtime.Statics;
 import org.jikesrvm.scheduler.RVMThread;
 import org.vmmagic.pragma.NoInline;
@@ -1383,6 +1385,18 @@ public abstract class TemplateCompilerFramework
 
         case JBC_getstatic: {
           FieldReference fieldRef = bcodes.getFieldReference();
+
+          // Octet: If System.out/err/in is used from the VM context, change it to VMSystem.out/err/in.
+          if (method.getStaticContext() == Context.VM_CONTEXT) {
+            if (fieldRef == Entrypoints.systemOut) {
+              fieldRef = Entrypoints.vmSystemOut;
+            } else if (fieldRef == Entrypoints.systemErr) {
+              fieldRef = Entrypoints.vmSystemErr;
+            } else if (fieldRef == Entrypoints.systemIn) { 
+              fieldRef = Entrypoints.vmSystemIn;
+            }
+          }
+
           if (shouldPrint) asm.noteBytecode(biStart, "getstatic", fieldRef);
           if (fieldRef.needsDynamicLink(method)) {
             // Forbidden from uninterruptible code as dynamic linking can cause
@@ -1437,7 +1451,11 @@ public abstract class TemplateCompilerFramework
           break;
         }
 
+        // Octet: Static cloning: Modified a few invoke cases to support multiple resolved methods for every method reference.
+
         case JBC_invokevirtual: {
+          
+          MethodReference methodRef = bcodes.getMethodReference();
           ForwardReference xx = null;
           if (biStart == this.pendingIdx) {
             ForwardReference x = emit_pending_goto(0);  // goto X
@@ -1449,7 +1467,7 @@ public abstract class TemplateCompilerFramework
             x.resolve(asm);                       //  X:
           }
 
-          MethodReference methodRef = bcodes.getMethodReference();
+          
           if (shouldPrint) asm.noteBytecode(biStart, "invokevirtual", methodRef);
           if (methodRef.getType().isMagicType()) {
             if (emit_Magic(methodRef)) {
@@ -1468,14 +1486,25 @@ public abstract class TemplateCompilerFramework
             if (VM.VerifyUnint && !isInterruptible) forbiddenBytecode("invokeinterface ", methodRef, bcodes.index());
             emit_invokeinterface(methodRef);
           } else {
+            // Velodrome: Context: Compute context if the current method is non-application while the invoked method is an 
+            // application method.
+            int context = method.getStaticContext();
+            if (!Context.isApplicationPrefix(method.getDeclaringClass().getTypeRef()) && 
+                Context.isApplicationPrefix(methodRef.getType())) {
+              if (methodRef.isNonAtomic) {
+                context = Context.NONTRANS_CONTEXT;
+              } else {
+                context = Context.TRANS_CONTEXT;
+              }
+            }            
             if (methodRef.needsDynamicLink(method)) {
               // Forbidden from uninterruptible code as dynamic linking can
               // cause interruptions
               if (VM.VerifyUnint && !isInterruptible) forbiddenBytecode("unresolved invokevirtual ", methodRef, bcodes.index());
-              emit_unresolved_invokevirtual(methodRef);
+              emit_unresolved_invokevirtual(methodRef, context);
             } else {
-              if (VM.VerifyUnint && !isInterruptible) checkTarget(methodRef.peekResolvedMethod(), bcodes.index());
-              emit_resolved_invokevirtual(methodRef);
+              if (VM.VerifyUnint && !isInterruptible) checkTarget(methodRef.peekResolvedMethod(context), bcodes.index());
+              emit_resolved_invokevirtual(methodRef, context);
             }
           }
 
@@ -1486,6 +1515,8 @@ public abstract class TemplateCompilerFramework
         }
 
         case JBC_invokespecial: {
+          
+          MethodReference methodRef = bcodes.getMethodReference();
           ForwardReference xx = null;
           if (biStart == this.pendingIdx) {
             ForwardReference x = emit_pending_goto(0);  // goto X
@@ -1496,14 +1527,27 @@ public abstract class TemplateCompilerFramework
             xx = emit_pending_goto(0);                     // goto XX
             x.resolve(asm);                       //  X:
           }
-          MethodReference methodRef = bcodes.getMethodReference();
+          
           if (shouldPrint) asm.noteBytecode(biStart, "invokespecial", methodRef);
-          RVMMethod target = methodRef.resolveInvokeSpecial();
+          
+          // Velodrome: Context: Compute context if the current method is non-application while the invoked method is an 
+          // application method.
+          int context = method.getStaticContext();
+          if (!Context.isApplicationPrefix(method.getDeclaringClass().getTypeRef()) && 
+              Context.isApplicationPrefix(methodRef.getType())) {
+            if (methodRef.isNonAtomic) {
+              context = Context.NONTRANS_CONTEXT;
+            } else {
+              context = Context.TRANS_CONTEXT;
+            }
+          }
+
+          RVMMethod target = methodRef.resolveInvokeSpecial(context);
           if (target != null) {
             if (VM.VerifyUnint && !isInterruptible) checkTarget(target, bcodes.index());
             emit_resolved_invokespecial(methodRef, target);
           } else {
-            emit_unresolved_invokespecial(methodRef);
+            emit_unresolved_invokespecial(methodRef, context);
           }
 
           if (xx != null) {
@@ -1514,6 +1558,8 @@ public abstract class TemplateCompilerFramework
         }
 
         case JBC_invokestatic: {
+          
+          MethodReference methodRef = bcodes.getMethodReference();
           ForwardReference xx = null;
           if (biStart == this.pendingIdx) {
             ForwardReference x = emit_pending_goto(0);  // goto X
@@ -1525,7 +1571,6 @@ public abstract class TemplateCompilerFramework
             x.resolve(asm);                       //  X:
           }
 
-          MethodReference methodRef = bcodes.getMethodReference();
           if (shouldPrint) asm.noteBytecode(biStart, "invokestatic", methodRef);
           if (methodRef.isMagic()) {
             if (emit_Magic(methodRef)) {
@@ -1538,8 +1583,19 @@ public abstract class TemplateCompilerFramework
             if (VM.VerifyUnint && !isInterruptible) forbiddenBytecode("unresolved invokestatic ", methodRef, bcodes.index());
             emit_unresolved_invokestatic(methodRef);
           } else {
-            if (VM.VerifyUnint && !isInterruptible) checkTarget(methodRef.peekResolvedMethod(), bcodes.index());
-            emit_resolved_invokestatic(methodRef);
+            // Velodrome: Context: Compute context if the current method is non-application while the invoked method is an 
+            // application method.
+            int context = method.getStaticContext();
+            if (!Context.isApplicationPrefix(method.getDeclaringClass().getTypeRef()) && 
+                Context.isApplicationPrefix(methodRef.getType())) {
+              if (methodRef.isNonAtomic) {
+                context = Context.NONTRANS_CONTEXT;
+              } else {
+                context = Context.TRANS_CONTEXT;
+              }
+            }
+            if (VM.VerifyUnint && !isInterruptible) checkTarget(methodRef.peekResolvedMethod(context), bcodes.index());
+            emit_resolved_invokestatic(methodRef, context);
           }
 
           if (xx != null) {
@@ -1550,6 +1606,8 @@ public abstract class TemplateCompilerFramework
         }
 
         case JBC_invokeinterface: {
+          
+          MethodReference methodRef = bcodes.getMethodReference();
           ForwardReference xx = null;
           if (biStart == this.pendingIdx) {
             ForwardReference x = emit_pending_goto(0);  // goto X
@@ -1561,7 +1619,6 @@ public abstract class TemplateCompilerFramework
             x.resolve(asm);                       //  X:
           }
 
-          MethodReference methodRef = bcodes.getMethodReference();
           bcodes.alignInvokeInterface();
           if (shouldPrint) asm.noteBytecode(biStart, "invokeinterface", methodRef);
           // Forbidden from uninterruptible code as interface invocation
@@ -1961,7 +2018,8 @@ public abstract class TemplateCompilerFramework
                 int targetidx = bcodes.readIntConst(); // fetch4BytesSigned();
                 RVMMethod methodRef = InvokeStatic.targetMethod(targetidx);
                 if (shouldPrint) asm.noteBytecode(biStart, "pseudo_invokestatic", methodRef);
-                emit_resolved_invokestatic(methodRef.getMemberRef().asMethodReference());
+                // Velodrome: Context: Pass the static context of the method reference
+                emit_resolved_invokestatic(methodRef.getMemberRef().asMethodReference(), methodRef.getStaticContext());
                 break;
               }
               /*
@@ -2943,17 +3001,19 @@ public abstract class TemplateCompilerFramework
   * method invocation
   */
 
+  // Velodrome: Context: Added the context as a parameter to a few methods
+  
   /**
    * Emit code to implement a dynamically linked invokevirtual
    * @param methodRef the referenced method
    */
-  protected abstract void emit_unresolved_invokevirtual(MethodReference methodRef);
+  protected abstract void emit_unresolved_invokevirtual(MethodReference methodRef, int context);
 
   /**
    * Emit code to implement invokevirtual
    * @param methodRef the referenced method
    */
-  protected abstract void emit_resolved_invokevirtual(MethodReference methodRef);
+  protected abstract void emit_resolved_invokevirtual(MethodReference methodRef, int context);
 
   /**
    * Emit code to implement a dynamically linked invokespecial
@@ -2966,7 +3026,7 @@ public abstract class TemplateCompilerFramework
    * Emit code to implement invokespecial
    * @param methodRef the referenced method
    */
-  protected abstract void emit_unresolved_invokespecial(MethodReference methodRef);
+  protected abstract void emit_unresolved_invokespecial(MethodReference methodRef, int context);
 
   /**
    * Emit code to implement a dynamically linked invokestatic
@@ -2978,7 +3038,7 @@ public abstract class TemplateCompilerFramework
    * Emit code to implement invokestatic
    * @param methodRef the referenced method
    */
-  protected abstract void emit_resolved_invokestatic(MethodReference methodRef);
+  protected abstract void emit_resolved_invokestatic(MethodReference methodRef, int context);
 
   // OSR only
   protected abstract void emit_invoke_compiledmethod(CompiledMethod cm);

@@ -21,6 +21,7 @@ import java.util.StringTokenizer;
 import org.jikesrvm.VM;
 import org.jikesrvm.Callbacks;
 import org.jikesrvm.adaptive.controller.Controller;
+import org.jikesrvm.classloader.Context;
 import org.jikesrvm.classloader.MemberReference;
 import org.jikesrvm.classloader.NormalMethod;
 import org.jikesrvm.runtime.Magic;
@@ -137,10 +138,16 @@ public final class EdgeCounts implements Callbacks.ExitMonitor {
     if (data == null) return;
     for (int i = 0; i < data.length; i++) {
       if (data[i] != null) {
+        // Octet: Static cloning: Support multiple resolved methods for every method reference.
+        // Here we try the application context and then the VM context.
+        // Velodrome: Context: Blindly using TRANS_CONTEXT for now
         NormalMethod m =
-            (NormalMethod) MemberReference.getMemberRef(i).asMethodReference().peekResolvedMethod();
+            (NormalMethod) MemberReference.getMemberRef(i).asMethodReference().peekResolvedMethod(Context.TRANS_CONTEXT);
         if (m != null) {
-          new BranchProfiles(m, data[i]).print(f);
+          m = (NormalMethod) MemberReference.getMemberRef(i).asMethodReference().peekResolvedMethod(Context.VM_CONTEXT);
+          if (m != null) {
+            new BranchProfiles(m, data[i]).print(f);
+          }
         }
       }
     }

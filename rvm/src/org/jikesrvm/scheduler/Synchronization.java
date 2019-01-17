@@ -39,6 +39,7 @@ public class Synchronization {
    */
   @Inline
   public static boolean tryCompareAndSwap(Object base, Offset offset, int testValue, int newValue) {
+    // Octet: TODO: need to instrument this access
     if (Barriers.NEEDS_INT_PUTFIELD_BARRIER || Barriers.NEEDS_INT_GETFIELD_BARRIER) {
       return Barriers.intTryCompareAndSwap(base, offset, testValue, newValue);
     } else {
@@ -65,6 +66,7 @@ public class Synchronization {
    */
   @Inline
   public static boolean tryCompareAndSwap(Object base, Offset offset, long testValue, long newValue) {
+    // Octet: TODO: may need to instrument this access
     if (Barriers.NEEDS_LONG_PUTFIELD_BARRIER || Barriers.NEEDS_LONG_GETFIELD_BARRIER) {
       return Barriers.longTryCompareAndSwap(base, offset, testValue, newValue);
     } else {
@@ -144,6 +146,7 @@ public class Synchronization {
    */
   @Inline
   public static boolean tryCompareAndSwap(Object base, Offset offset, Object testValue, Object newValue) {
+    // Octet: TODO: need to instrument this access
     if (Barriers.NEEDS_OBJECT_PUTFIELD_BARRIER || Barriers.NEEDS_OBJECT_GETFIELD_BARRIER) {
       return Barriers.objectTryCompareAndSwap(base, offset, testValue, newValue);
     } else {

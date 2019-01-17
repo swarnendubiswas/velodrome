@@ -72,3 +72,25 @@ V forceOneCPU int -1
 Force all threads to run on one CPU.  The argument specifies which CPU (starting from 0).
 
 
+# Octet: command-line options
+# Octet: TODO: the change from 100 to 300 was part of the counter branch; I'm not sure if the results were conclusive enough to support changing it.
+# In any case, it's unrelated to RBA.
+V octetWaitSpinCount int 300
+When waiting, how many spin loops to do before switching to pthread yield?
+
+
+V octetWaitYieldCount int 1
+When waiting, how many yields to do before switching to a pthread condition wait?
+
+
+V octetIODir String null
+Where to store the visualized CFGS, plus potentially other input/output files
+
+
+V staticRaceDir String null
+Path where Chord static race detection output is present
+
+
+V benchmarkName String null
+Name of the benchmark that is currently being executed 
+

@@ -140,6 +140,8 @@ public final class NormalMethod extends RVMMethod implements BytecodeConstants {
   private static final HashMapRVM<NormalMethod, Integer> savedOperandWords =
     new HashMapRVM<NormalMethod, Integer>();
 
+  // Octet: Static cloning: Support multiple resolved methods for every method reference.
+
   /**
    * Construct a normal Java bytecode method's information
    *
@@ -161,8 +163,8 @@ public final class NormalMethod extends RVMMethod implements BytecodeConstants {
    */
   NormalMethod(TypeReference dc, MemberReference mr, short mo, TypeReference[] et, short lw, short ow,
                   byte[] bc, ExceptionHandlerMap eMap, int[] lm, LocalVariableTable lvt, int[] constantPool, Atom sig,
-                  RVMAnnotation[] annotations, RVMAnnotation[][] parameterAnnotations, Object ad) {
-    super(dc, mr, mo, et, sig, annotations, parameterAnnotations, ad);
+                  RVMAnnotation[] annotations, RVMAnnotation[][] parameterAnnotations, Object ad, int resolvedContext) {
+    super(dc, mr, mo, et, sig, annotations, parameterAnnotations, ad, resolvedContext);
     localWords = lw;
     operandWords = ow;
     bytecodes = bc;
@@ -170,6 +172,23 @@ public final class NormalMethod extends RVMMethod implements BytecodeConstants {
     lineNumberMap = lm;
     localVariableTables.put(this, lvt);
     computeSummary(constantPool);
+  }
+
+
+  NormalMethod(NormalMethod method, int resolvedContext) {
+    super(method, resolvedContext);
+    this.localWords = method.localWords;
+    this.operandWords = method.operandWords;
+    this.bytecodes = method.bytecodes;
+    this.exceptionHandlerMap = method.exceptionHandlerMap;
+    this.lineNumberMap = method.lineNumberMap;
+    localVariableTables.put(this, method.getLocalVariableTable());
+    this.summaryFlags = method.summaryFlags;
+    this.summarySize = method.summarySize;
+  }
+
+  RVMMethod cloneMethod(int resolvedContext) {
+    return new NormalMethod(this, resolvedContext);
   }
 
   @Override

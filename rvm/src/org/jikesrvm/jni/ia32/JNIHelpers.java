@@ -14,6 +14,7 @@ package org.jikesrvm.jni.ia32;
 
 import java.lang.reflect.Constructor;
 import org.jikesrvm.VM;
+import org.jikesrvm.classloader.Context;
 import org.jikesrvm.classloader.MemberReference;
 import org.jikesrvm.classloader.RVMMethod;
 import org.jikesrvm.classloader.TypeReference;
@@ -49,7 +50,8 @@ public abstract class JNIHelpers extends JNIGenericHelpers {
     // get the parameter list as Java class
     MemberReference mr = MemberReference.getMemberRef(methodID);
     TypeReference tr = java.lang.JikesRVMSupport.getTypeForClass(cls).getTypeRef();
-    RVMMethod mth = MemberReference.findOrCreate(tr, mr.getName(), mr.getDescriptor()).asMethodReference().resolve();
+    // Octet: Static cloning: Support multiple resolved methods for every method reference.
+    RVMMethod mth = MemberReference.findOrCreate(tr, mr.getName(), mr.getDescriptor()).asMethodReference().resolve(Context.JNI_CONTEXT);
 
     Constructor<?> constMethod = java.lang.reflect.JikesRVMSupport.createConstructor(mth);
     if (!mth.isPublic()) {
@@ -262,7 +264,8 @@ public abstract class JNIHelpers extends JNIGenericHelpers {
   static Object packageAndInvoke(Object obj, int methodID, Address argAddress, TypeReference expectReturnType,
                                  boolean skip4Args, boolean isVarArg) throws Exception {
 
-    RVMMethod targetMethod = MemberReference.getMemberRef(methodID).asMethodReference().resolve();
+    // Octet: Static cloning: Support multiple resolved methods for every method reference.
+    RVMMethod targetMethod = MemberReference.getMemberRef(methodID).asMethodReference().resolve(Context.JNI_CONTEXT);
     TypeReference returnType = targetMethod.getReturnType();
 
     if (JNIFunctions.traceJNI) {

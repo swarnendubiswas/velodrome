@@ -14,6 +14,7 @@ package sun.misc;
 
 import java.lang.reflect.Field;
 
+import org.jikesrvm.VM;
 import org.jikesrvm.classloader.RVMField;
 import org.jikesrvm.classloader.RVMType;
 import org.jikesrvm.runtime.Magic;
@@ -55,6 +56,13 @@ public final class Unsafe {
   }
 
   public boolean compareAndSwapLong(Object obj,long offset,long expect,long update) {
+
+    // Octet: Verifying that applications don't call this method.
+    // Octet: TODO: We need more assertions like this in this class,
+    // to figure out which methods are called by our benchmarks and
+    // thus need barriers.
+    if (VM.VerifyAssertions) { VM._assert(false); }
+    
     Offset off = Offset.fromIntSignExtend((int)offset);
     return Synchronization.tryCompareAndSwap(obj, off, expect, update);
   }
@@ -170,6 +178,10 @@ public final class Unsafe {
   }
 
   public void putObject(Object obj,long offset,Object value) {
+    
+    // Octet: TODO: We would like to invoke an Octet barrier here, but there's no clear mechanism for calling a barrier, since the client analysis might have overridden it.
+    //OctetBarriers.writeObject(obj, 0, -1);
+    
     Offset off = longToOffset(offset);
     if (NEEDS_OBJECT_PUTFIELD_BARRIER) {
       objectFieldWrite(obj, value, off, 0);

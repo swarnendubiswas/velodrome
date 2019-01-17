@@ -286,7 +286,8 @@ public class StackTrace {
             int bci = map.getBytecodeIndexForMCOffset(instructionOffset);
             for (; iei >= 0; iei = OptEncodedCallSiteTree.getParent(iei, inlineEncoding)) {
               int mid = OptEncodedCallSiteTree.getMethodID(iei, inlineEncoding);
-              RVMMethod method = MemberReference.getMemberRef(mid).asMethodReference().getResolvedMember();
+              // Octet: Static cloning: Support multiple resolved methods for every method reference.
+              RVMMethod method = MemberReference.getMemberRef(mid).asMethodReference().getResolvedMember(compiledMethod.getMethod().getStaticContext());
               int lineNumber = ((NormalMethod)method).getLineNumberForBCIndex(bci);
               elements[element] = new Element(method, lineNumber);
               element++;

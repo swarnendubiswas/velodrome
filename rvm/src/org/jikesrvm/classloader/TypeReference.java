@@ -15,6 +15,7 @@ package org.jikesrvm.classloader;
 import org.jikesrvm.VM;
 import static org.jikesrvm.SizeConstants.BYTES_IN_ADDRESS;
 
+import org.jikesrvm.octet.Octet;
 import org.jikesrvm.runtime.ReflectionBase;
 import org.jikesrvm.util.ImmutableEntryHashSetRVM;
 
@@ -124,6 +125,14 @@ public final class TypeReference {
   public static final TypeReference ITable = findOrCreate(org.jikesrvm.objectmodel.ITable.class);
   public static final TypeReference IMT = findOrCreate(org.jikesrvm.objectmodel.IMT.class);
   public static final TypeReference Thread = findOrCreate(org.jikesrvm.scheduler.RVMThread.class);
+  // Octet: A type reference to the class for Octet barriers so we can check for it (for debugging purposes).
+  // Added finalizer and compilation threads, so we can check for these types when looking at a thread object (for debugging purposes only)
+  public static final TypeReference OctetBarriers = findOrCreate(org.jikesrvm.octet.OctetBarriers.class);
+  /*
+  public static final TypeReference FinalizerThread = findOrCreate(org.jikesrvm.scheduler.FinalizerThread.class);
+  public static final TypeReference CompilationThread = findOrCreate(org.jikesrvm.adaptive.recompilation.CompilationThread.class);
+  public static final TypeReference ControllerThread = findOrCreate(org.jikesrvm.adaptive.controller.ControllerThread.class);
+  */
   public static final TypeReference FunctionTable = findOrCreate(org.jikesrvm.jni.FunctionTable.class);
   public static final TypeReference LinkageTripletTable = findOrCreate(org.jikesrvm.jni.LinkageTripletTable.class);
 

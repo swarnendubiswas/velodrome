@@ -179,7 +179,8 @@ public final class DefaultInlineOracle extends InlineTools implements InlineOrac
               RVMClass[] subClasses = klass.getSubClasses();
               if (subClasses.length != 1) break; // multiple subclasses => multiple targets
               RVMMethod singleImpl =
-                  subClasses[0].findDeclaredMethod(staticCallee.getName(), staticCallee.getDescriptor());
+                  // Octet: Static cloning: Support multiple resolved methods for every method reference.
+                  subClasses[0].findDeclaredMethod(staticCallee.getName(), staticCallee.getDescriptor(), staticCallee.getResolvedContext());
               if (singleImpl != null && !singleImpl.isAbstract()) {
                 // found something
                 if (verbose) VM.sysWriteln("\tsingle impl of abstract method");

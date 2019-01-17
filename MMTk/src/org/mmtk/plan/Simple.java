@@ -16,11 +16,11 @@ import org.mmtk.policy.Space;
 import org.mmtk.utility.Constants;
 import org.mmtk.utility.Log;
 import org.mmtk.utility.alloc.Allocator;
-import org.mmtk.utility.options.*;
+import org.mmtk.utility.options.Options;
 import org.mmtk.utility.statistics.Timer;
 import org.mmtk.vm.VM;
-
-import org.vmmagic.pragma.*;
+import org.vmmagic.pragma.Inline;
+import org.vmmagic.pragma.Uninterruptible;
 
 /**
  * This abstract class implements the core functionality for
@@ -63,6 +63,8 @@ public abstract class Simple extends Plan implements Constants {
   public static final short FORWARD_FINALIZABLE = Phase.createSimple("forward-finalize", finalizeTime);
   public static final short RELEASE             = Phase.createSimple("release");
   public static final short COMPLETE            = Phase.createSimple("complete", null);
+  // Velodrome: Added a phase to scan metadata references as weak references
+  public static final short VELODROME_METADATA  = Phase.createSimple("velodrome-metadata-trace", refTypeTime);
 
   /* Sanity placeholder */
   public static final short PRE_SANITY_PLACEHOLDER  = Phase.createSimple("pre-sanity-placeholder", null);
@@ -131,10 +133,17 @@ public abstract class Simple extends Plan implements Constants {
       Phase.scheduleCollector  (CLOSURE),
       Phase.scheduleCollector  (WEAK_REFS),
       Phase.scheduleCollector  (FINALIZABLE),
+      // Velodrome: Added a phase for processing metadata references. It is important to be after the 
+      // FINALIZABLE phase since new objects are marked gray, that are then added to the Velodrome queue.      
+      Phase.scheduleCollector  (VELODROME_METADATA),
       Phase.scheduleGlobal     (CLOSURE),
       Phase.scheduleCollector  (CLOSURE),
       Phase.schedulePlaceholder(WEAK_TRACK_REFS),
-      Phase.scheduleCollector  (PHANTOM_REFS));
+      Phase.scheduleCollector  (PHANTOM_REFS),
+      // Velodrome: Added a phase for processing metadata references. It is important to be after the 
+      // FINALIZABLE phase since new objects are marked gray, that are then added to the Velodrome queue.
+      Phase.scheduleCollector  (VELODROME_METADATA)
+      );
 
   /**
    * Ensure that all references in the system are correct.

@@ -108,6 +108,12 @@ public final class FieldReference extends MemberReference implements SizeConstan
     resolvedMember = it;
   }
 
+  /** Octet: added this method to get resolved field without doing any resolving */
+  @Uninterruptible
+  public RVMField getResolvedField() {
+    return resolvedMember;
+  }
+  
   /**
    * Find the RVMField that this field reference refers to using
    * the search order specified in JVM spec 5.4.3.2.

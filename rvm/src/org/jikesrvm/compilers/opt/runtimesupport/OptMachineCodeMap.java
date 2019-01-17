@@ -13,27 +13,32 @@
 package org.jikesrvm.compilers.opt.runtimesupport;
 
 import java.util.ArrayList;
+
 import org.jikesrvm.ArchitectureSpecific;
-import org.jikesrvm.VM;
 import org.jikesrvm.Constants;
+import org.jikesrvm.VM;
 import org.jikesrvm.adaptive.database.callgraph.CallSite;
-import org.jikesrvm.classloader.RVMArray;
+import org.jikesrvm.classloader.Context;
 import org.jikesrvm.classloader.MemberReference;
-import org.jikesrvm.classloader.RVMMethod;
+import org.jikesrvm.classloader.MethodReference;
 import org.jikesrvm.classloader.NormalMethod;
+import org.jikesrvm.classloader.RVMArray;
+import org.jikesrvm.classloader.RVMMethod;
 import org.jikesrvm.classloader.TypeReference;
 import org.jikesrvm.compilers.opt.OptimizingCompilerException;
 import org.jikesrvm.compilers.opt.driver.OptConstants;
 import org.jikesrvm.compilers.opt.inlining.CallSiteTree;
-import org.jikesrvm.compilers.opt.ir.MIR_Call;
 import org.jikesrvm.compilers.opt.ir.GCIRMap;
 import org.jikesrvm.compilers.opt.ir.GCIRMapElement;
 import org.jikesrvm.compilers.opt.ir.IR;
 import org.jikesrvm.compilers.opt.ir.Instruction;
+import org.jikesrvm.compilers.opt.ir.MIR_Call;
 import org.jikesrvm.compilers.opt.ir.operand.MethodOperand;
 import org.vmmagic.pragma.Inline;
 import org.vmmagic.pragma.Uninterruptible;
 import org.vmmagic.unboxed.Offset;
+
+// Octet: Static cloning: Various changes in this class to support multiple resolved methods for every method reference.
 
 /**
  * A class that encapsulates mapping information about generated machine code.
@@ -73,10 +78,11 @@ public final class OptMachineCodeMap implements Constants, OptConstants {
   /**
    * Private constructor, object should be created via create
    */
-  private OptMachineCodeMap(int[] _MCInformation, int[] _gcMaps, int[] _inlineEncoding) {
+  private OptMachineCodeMap(int[] _MCInformation, int[] _gcMaps, int[] _inlineEncoding, int _context) {
     MCInformation = _MCInformation;
     gcMaps = _gcMaps;
     inlineEncoding = _inlineEncoding;
+    context = _context;
   }
 
   /**
@@ -86,6 +92,7 @@ public final class OptMachineCodeMap implements Constants, OptConstants {
     MCInformation = null;
     gcMaps = null;
     inlineEncoding = null;
+    context = Context.INVALID_CONTEXT;
   }
 
   /**
@@ -107,7 +114,7 @@ public final class OptMachineCodeMap implements Constants, OptConstants {
     }
 
     // create all machine code maps
-    final OptMachineCodeMap map = generateMCInformation(ir.MIRInfo.gcIRMap, DUMP_MAPS);
+    final OptMachineCodeMap map = generateMCInformation(ir.MIRInfo.gcIRMap, DUMP_MAPS, ir.getMethod().getStaticContext());
 
     if (DUMP_MAP_SIZES) {
       map.recordStats(ir.method,
@@ -158,7 +165,17 @@ public final class OptMachineCodeMap implements Constants, OptConstants {
       return null;
     }
     int mid = OptEncodedCallSiteTree.getMethodID(iei, inlineEncoding);
-    return (NormalMethod) MemberReference.getMemberRef(mid).asMethodReference().getResolvedMember();
+    // Octet: Static cloning: Support multiple resolved methods for every method reference.
+    // Velodrome: Context: The method corresponding to the given machine code offset could be a library method
+    // which will not have any context matches other than VM_CONTEXT
+    MethodReference mRef = MemberReference.getMemberRef(mid).asMethodReference();
+    int con = context;
+    if (!Context.isApplicationPrefix(mRef.getType()) && con != Context.VM_CONTEXT) {
+      con = Context.VM_CONTEXT;
+    }
+    RVMMethod m = mRef.getResolvedMember(con);
+    if (VM.VerifyAssertions) { VM._assert(m != null); }
+    return (NormalMethod) m;
   }
 
   /**
@@ -207,7 +224,7 @@ public final class OptMachineCodeMap implements Constants, OptConstants {
           int iei = getInlineEncodingIndex(entry);
           if (iei != -1) {
             int mid = OptEncodedCallSiteTree.getMethodID(iei, inlineEncoding);
-            RVMMethod caller = MemberReference.getMemberRef(mid).asMethodReference().peekResolvedMethod();
+            RVMMethod caller = MemberReference.getMemberRef(mid).asMethodReference().peekResolvedMethod(context);
             if (caller != null) {
               if (ans == null) ans = new ArrayList<CallSite>();
               ans.add(new CallSite(caller, bcIndex));
@@ -330,7 +347,7 @@ public final class OptMachineCodeMap implements Constants, OptConstants {
    *  @param irMap  the irmap to translate from
    *  @param DUMP_MAPS dump while we work
    */
-  private static OptMachineCodeMap generateMCInformation(GCIRMap irMap, boolean DUMP_MAPS) {
+  private static OptMachineCodeMap generateMCInformation(GCIRMap irMap, boolean DUMP_MAPS, int context) {
     CallSiteTree inliningMap = new CallSiteTree();
     int numEntries = 0;
 
@@ -462,8 +479,7 @@ public final class OptMachineCodeMap implements Constants, OptConstants {
     int[] mcInformation = new int[lastMCInfoEntry];
     System.arraycopy(tmpMC, 0, mcInformation, 0, mcInformation.length);
     int[] gcMaps = gcMapBuilder.finish();
-
-    return new OptMachineCodeMap(mcInformation, gcMaps, inlineEncoding);
+    return new OptMachineCodeMap(mcInformation, gcMaps, inlineEncoding, context);
   }
 
   ////////////////////////////////////////////
@@ -644,7 +660,7 @@ public final class OptMachineCodeMap implements Constants, OptConstants {
       boolean first = true;
       while (iei >= 0) {
         int mid = OptEncodedCallSiteTree.getMethodID(iei, inlineEncoding);
-        RVMMethod meth = MemberReference.getMemberRef(mid).asMethodReference().getResolvedMember();
+        RVMMethod meth = MemberReference.getMemberRef(mid).asMethodReference().getResolvedMember(context);
         if (first) {
           first = false;
           VM.sysWrite("\n\tIn method    " + meth + " at bytecode " + bci);
@@ -807,6 +823,9 @@ public final class OptMachineCodeMap implements Constants, OptConstants {
    * encoded data as defined by OptEncodedCallSiteTree.
    */
   public final int[] inlineEncoding;
+  
+  private final int context;
+  
   /**
    * Running totals for the size of machine code and maps
    */

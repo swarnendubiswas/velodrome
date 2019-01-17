@@ -15,8 +15,10 @@ package org.jikesrvm.compilers.opt.regalloc.ia32;
 import static org.jikesrvm.SizeConstants.BYTES_IN_ADDRESS;
 
 import java.util.Enumeration;
+
 import org.jikesrvm.ArchitectureSpecificOpt.PhysicalRegisterSet;
 import org.jikesrvm.VM;
+import org.jikesrvm.classloader.Context;
 import org.jikesrvm.classloader.InterfaceMethodSignature;
 import org.jikesrvm.classloader.TypeReference;
 import org.jikesrvm.compilers.opt.DefUse;
@@ -111,7 +113,13 @@ public abstract class CallingConvention extends IRTools
       if (MIR_Call.hasMethod(call)) {
         MethodOperand mo = MIR_Call.getMethod(call);
         if (mo.isInterface()) {
-          InterfaceMethodSignature sig = InterfaceMethodSignature.findOrCreate(mo.getMemberRef());
+          // Octet: Static cloning: Support multiple resolved methods for every method reference.
+          // Velodrome: Context: Interface invocation for non-application methods can only have VM_CONTEXT
+          int context = call.position.method.getStaticContext();
+          if (mo.hasTarget() && !Context.isApplicationPrefix(mo.getTarget().getDeclaringClass().getTypeRef())) {
+            context = Context.VM_CONTEXT;
+          }
+          InterfaceMethodSignature sig = InterfaceMethodSignature.findOrCreate(mo.getMemberRef(), context);
           MemoryOperand M =
               MemoryOperand.BD(ir.regpool.makeTROp(),
                                    ArchEntrypoints.hiddenSignatureIdField.getOffset(),

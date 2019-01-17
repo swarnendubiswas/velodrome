@@ -14,6 +14,8 @@ package org.jikesrvm.objectmodel;
 
 import org.jikesrvm.Constants;
 import org.jikesrvm.mm.mminterface.MemoryManagerConstants;
+import org.jikesrvm.octet.Octet;
+import org.jikesrvm.velodrome.Velodrome;
 
 /**
  * Defines other header words not used for
@@ -33,8 +35,21 @@ public interface MiscHeaderConstants extends Constants {
       (MemoryManagerConstants.GENERATE_GC_TRACE ? 3 : 0);
   int GC_TRACING_HEADER_BYTES = GC_TRACING_HEADER_WORDS << LOG_BYTES_IN_ADDRESS;
 
+  /** Octet: number of extra header bytes; also used below to calculate NUM_BYTES_HEADER */
+  int OCTET_HEADER_BYTES = Octet.getConfig().addHeaderWord() ? BYTES_IN_WORD : 0;
+  
+  /** Velodrome: Add an extra word to keep track of metadata for locks */
+  int VELODROME_HEADER_BYTES = Octet.getConfig().addMiscHeader() ? BYTES_IN_WORD : 0;
+  
+  /** Velodrome: Adding two extra words to track read/write accesses for arrays */
+  int VELODROME_WRITE_METADATA_BYTES = Velodrome.instrumentArrays() ? BYTES_IN_WORD : 0;
+  int VELODROME_READ_METADATA_BYTES = Velodrome.instrumentArrays() ? BYTES_IN_WORD : 0;  
+
   /**
    * How many bytes are used by all misc header fields?
    */
-  int NUM_BYTES_HEADER = GC_TRACING_HEADER_BYTES; // + YYY_HEADER_BYTES;
+  // Velodrome: Included count for header bytes
+  int NUM_BYTES_HEADER = GC_TRACING_HEADER_BYTES + OCTET_HEADER_BYTES + VELODROME_HEADER_BYTES + 
+                          VELODROME_WRITE_METADATA_BYTES + VELODROME_READ_METADATA_BYTES; // + YYY_HEADER_BYTES;
+
 }

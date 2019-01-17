@@ -25,6 +25,8 @@ import org.jikesrvm.runtime.Memory;
 import org.jikesrvm.scheduler.Lock;
 import org.jikesrvm.scheduler.ThinLock;
 import org.jikesrvm.scheduler.RVMThread;
+import org.jikesrvm.velodrome.Velodrome;
+import org.jikesrvm.velodrome.VelodromeMetadataHelper;
 import org.vmmagic.pragma.Inline;
 import org.vmmagic.pragma.Interruptible;
 import org.vmmagic.pragma.NoInline;
@@ -562,19 +564,48 @@ public class JavaHeader implements JavaHeaderConstants {
     // nothing to do (all objects have thin locks in this object model);
   }
 
+  // Velodrome: Changes for lock acquire()/release()
   /**
-   * Generic lock
+   * Generic lock with Velodrome instrumentation
    */
   @Unpreemptible("Become another thread when lock is contended, don't preempt in other cases")
   public static void genericLock(Object o) {
     ThinLock.lock(o, STATUS_OFFSET);
+    if (Velodrome.trackSynchronizationPrimitives()) {
+      if (VM.VerifyAssertions) { VM._assert(Velodrome.addMiscHeader()); }
+      if (RVMThread.getCurrentThread().isOctetThread()) {
+        VelodromeMetadataHelper.trackLockAcquire(o);
+      }
+    }
+  }
+  
+  /**
+   * Generic lock without Velodrome instrumentation
+   */
+  @Unpreemptible("Become another thread when lock is contended, don't preempt in other cases")
+  public static void genericLockWithoutInstrumentation(Object o) {
+    ThinLock.lock(o, STATUS_OFFSET);
   }
 
   /**
-   * Generic unlock
+   * Generic unlock with Velodrome instrumentation
    */
   @Unpreemptible("No interruption unless of exceptions")
   public static void genericUnlock(Object o) {
+    if (Velodrome.trackSynchronizationPrimitives()) {
+      if (VM.VerifyAssertions) { VM._assert(Velodrome.addMiscHeader()); }
+      if (RVMThread.getCurrentThread().isOctetThread()) {
+          VelodromeMetadataHelper.trackLockRelease(o);
+        }
+    }
+    ThinLock.unlock(o, STATUS_OFFSET);
+  }
+  
+  /**
+   * Generic unlock without Velodrome instrumentation
+   */
+  @Unpreemptible("No interruption unless of exceptions")
+  public static void genericUnlockWithoutInstrumentation(Object o) {
     ThinLock.unlock(o, STATUS_OFFSET);
   }
 

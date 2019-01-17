@@ -13,14 +13,19 @@
 package org.jikesrvm.compilers.opt.runtimesupport.ia32;
 
 import org.jikesrvm.ArchitectureSpecific;
-import org.jikesrvm.VM;
-import org.jikesrvm.Constants;
 import org.jikesrvm.ArchitectureSpecific.Registers;
+import org.jikesrvm.Constants;
+import org.jikesrvm.VM;
+import org.jikesrvm.classloader.Context;
+import org.jikesrvm.classloader.RVMMethod;
 import org.jikesrvm.compilers.common.CompiledMethod;
 import org.jikesrvm.compilers.opt.runtimesupport.OptCompiledMethod;
+import org.jikesrvm.octet.Octet;
 import org.jikesrvm.runtime.ExceptionDeliverer;
 import org.jikesrvm.runtime.Magic;
 import org.jikesrvm.scheduler.RVMThread;
+import org.jikesrvm.velodrome.TransactionalHBGraph;
+import org.jikesrvm.velodrome.Velodrome;
 import org.vmmagic.pragma.Unpreemptible;
 import org.vmmagic.unboxed.Address;
 import org.vmmagic.unboxed.Offset;
@@ -142,6 +147,16 @@ public abstract class OptExceptionDeliverer extends ExceptionDeliverer
     if (VM.VerifyAssertions) VM._assert(NUM_NONVOLATILE_FPRS == 0);
 
     registers.unwindStackFrame();
+    
+    // Velodrome: Decrement the transaction depth for the current thread
+    RVMMethod rMethod = compiledMethod.getMethod();
+    if (!rMethod.isNative()) {
+      if (Octet.shouldInstrumentMethod(rMethod) && (Velodrome.methodsAsTransactions() || rMethod.isSynchronized() && Velodrome.syncBlocksAsTransactions())) {
+        if (Context.isTRANSContext(rMethod.getStaticContext()) && Context.isNONTRANSContext(rMethod.getResolvedContext())) {
+          TransactionalHBGraph.handleExceptionDuringStackUnwinding(rMethod);
+        }
+      }
+    }
 
     if (TRACE) {
       VM.sysWrite("Registers after unwinding frame for ");

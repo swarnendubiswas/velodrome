@@ -51,17 +51,18 @@ public final class OptLinker implements BytecodeConstants {
     BytecodeStream bcodes = realMethod.getBytecodes();
     bcodes.reset(bci);
     int opcode = bcodes.nextInstruction();
+    // Octet: Static cloning: Support multiple resolved methods for every method reference.
     switch (opcode) {
       case JBC_getfield:
       case JBC_putfield:
       case JBC_getstatic:
       case JBC_putstatic:
-        TableBasedDynamicLinker.resolveMember(bcodes.getFieldReference());
+        TableBasedDynamicLinker.resolveMember(bcodes.getFieldReference(), cm.method.getStaticContext());
         break;
       case JBC_invokevirtual:
       case JBC_invokestatic:
       case JBC_invokespecial:
-        TableBasedDynamicLinker.resolveMember(bcodes.getMethodReference());
+        TableBasedDynamicLinker.resolveMember(bcodes.getMethodReference(), cm.method.getStaticContext());
         break;
       case JBC_invokeinterface:
       default:

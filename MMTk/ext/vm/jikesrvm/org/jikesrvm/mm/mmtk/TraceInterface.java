@@ -158,7 +158,8 @@ import org.vmmagic.unboxed.Word;
               for (int j = iei; j >= 0 && allocCall;
                    j = OptEncodedCallSiteTree.getParent(j,inlineEncoding)) {
                 int mid = OptEncodedCallSiteTree.getMethodID(j, inlineEncoding);
-                m = MemberReference.getMemberRef(mid).asMethodReference().getResolvedMember();
+                // Octet: Static cloning: Support multiple resolved methods for every method reference.
+                m = MemberReference.getMemberRef(mid).asMethodReference().getResolvedMember(compiledMethod.getMethod().getStaticContext());
                 if (!isAllocCall(m.getName().getBytes()))
                   allocCall = false;
                 if (j > 0)

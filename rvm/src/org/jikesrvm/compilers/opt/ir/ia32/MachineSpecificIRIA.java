@@ -75,7 +75,9 @@ public abstract class MachineSpecificIRIA extends MachineSpecificIR {
         case GET_CURRENT_PROCESSOR_opcode:
           return true;
         default:
-          throw new OptimizingCompilerException("SimpleEscape: Unexpected " + instruction);
+          // Octet: changed this code to handle other instructions encountered in low-level IR.
+          return true;
+          //throw new OptimizingCompilerException("SimpleEscape: Unexpected " + instruction);
       }
     }
 

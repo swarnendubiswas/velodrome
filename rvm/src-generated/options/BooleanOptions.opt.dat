@@ -102,6 +102,8 @@ Turn whiles into untils
 ##########
 # Simple escape optimization options
 ##########
+# Octet: enable method summaries for escape analysis at all opt levels (was ESCAPE_SIMPLE_IPA -1 false)
+# Octet: TODO: disabling for now since it seems to be completely broken (was 0 true)
 ESCAPE_SIMPLE_IPA -1 false
 Eagerly compute method summaries for simple escape analysis
 
@@ -321,3 +323,6 @@ Enable detailed debugging statements for instrumentation sampling
 DEBUG_GCP -1 false
 Perform noisy global code placement
 
+# Octet: Command-line option(s)
+VISUALIZE_CFG -1 false
+Visualize CFGs of methods.

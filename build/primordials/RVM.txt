@@ -80,3 +80,8 @@ Lorg/jikesrvm/scheduler/Lock;
 
 [Lorg/vmmagic/pragma/Inline$When;
 Lsun/misc/Unsafe;
+
+# Octet: array types that need to be in boot image
+[Lorg/jikesrvm/octet/Stats$ThreadSafeCounter;
+[Lorg/jikesrvm/octet/Site;
+[Lorg/jikesrvm/octet/Stats$UnsyncCounter;

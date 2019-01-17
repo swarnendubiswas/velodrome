@@ -126,6 +126,26 @@ public class FieldLayoutPacked extends FieldLayout implements SizeConstants {
 
       return result;
     }
+    
+    // Velodrome: for allocating field metadata, copied from PACER. Here we are forcing words to be
+    // laid out side by side which by the way is not necessary.
+    @Override
+    int nextOffsetUnaligned(int size) {
+      //if (VM.VerifyAssertions) { VM._assert(size > MAX_SLOT_SIZE); }
+      int refSlot = get(LOG_BYTES_IN_ADDRESS);
+      int end = getObjectSize();
+      int result;
+      // if there's a 4-bite "hole" at the end of the object, start from there and move the hole
+      if (refSlot == end  && refSlot != 0) {
+        result = refSlot;
+        set(LOG_BYTES_IN_ADDRESS, result + size);
+        // otherwise, add the data at the end and leave existing holes
+      } else {
+        result = end;
+      }
+      ensureObjectSize(result + size);
+      return result;
+    }    
   }
 
   public FieldLayoutPacked(boolean largeFieldsFirst, boolean clusterReferenceFields) {

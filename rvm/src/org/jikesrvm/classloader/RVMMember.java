@@ -23,7 +23,11 @@ import org.vmmagic.unboxed.Offset;
 public abstract class RVMMember extends AnnotatedElement implements Constants, ClassLoaderConstants {
 
   /** Initial value for a field offset - indicates field not laid out. */
-  private static final int NO_OFFSET = Short.MIN_VALUE + 1;
+  // Octet: Made package-protected instead of private, so RVMField can access it.
+  // Velodrome: LATER: Shouldn't this be initialized to Integer.MIN_VALUE? It seems that the offset cannot be an odd number.
+  // Otherwise, there are more slots allocated in the JTOC than Short.MIN_VALUE. 
+  // Also made this public. 
+  public static final int NO_OFFSET = Short.MIN_VALUE + 1;
 
   /**
    * The class that declared this member, available by calling
@@ -76,6 +80,16 @@ public abstract class RVMMember extends AnnotatedElement implements Constants, C
   //                         Section 1.                                 //
   // The following are available after class loading.                   //
   //--------------------------------------------------------------------//
+
+  // Octet: Static cloning: Support for cloning resolved methods.
+  protected RVMMember(RVMMember member) {
+    super(member);
+    this.declaringClass = member.declaringClass;
+    this.memRef = member.memRef;
+    this.modifiers = member.modifiers;
+    this.signature = member.signature;
+    this.offset = NO_OFFSET; // invalid value. Set to valid value during RVMClass.resolve()
+  }
 
   /**
    * Class that declared this field or method. Not available before

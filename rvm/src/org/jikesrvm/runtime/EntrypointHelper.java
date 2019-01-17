@@ -15,6 +15,7 @@ package org.jikesrvm.runtime;
 import org.jikesrvm.VM;
 import org.jikesrvm.classloader.Atom;
 import org.jikesrvm.classloader.BootstrapClassLoader;
+import org.jikesrvm.classloader.Context;
 import org.jikesrvm.classloader.RVMClass;
 import org.jikesrvm.classloader.RVMField;
 import org.jikesrvm.classloader.RVMMember;
@@ -54,7 +55,8 @@ public class EntrypointHelper {
       if ((member = cls.findDeclaredField(memName, memDescriptor)) != null) {
         return member;
       }
-      if ((member = cls.findDeclaredMethod(memName, memDescriptor)) != null) {
+      // Octet: Static cloning: Support multiple resolved methods for every method reference.
+      if ((member = cls.findDeclaredMethod(memName, memDescriptor, Context.VM_CONTEXT)) != null) {
         return member;
       }
     } catch (Exception e) {
@@ -107,7 +109,8 @@ public class EntrypointHelper {
 
         Atom descriptor = Atom.findOrCreateAsciiAtom(makeDescriptor(argTypes));
 
-        RVMMethod method = cls.findDeclaredMethod(member, descriptor);
+        // Octet: Static cloning: Support multiple resolved methods for every method reference.
+        RVMMethod method = cls.findDeclaredMethod(member, descriptor, Context.VM_CONTEXT);
         if (method != null) {
           return method;
         }
@@ -215,7 +218,9 @@ public class EntrypointHelper {
         Atom memName = Atom.findOrCreateAsciiAtom(member);
         Atom memDescriptor = Atom.findOrCreateAsciiAtom(descriptor);
 
-        NormalMethod m = (NormalMethod)cls.findDeclaredMethod(memName, memDescriptor);
+        // Octet: Support multiple resolved methods for every method reference.
+        // Velodrome: Context: Here we can possibly check for run() method, and pass NONTRANS_CONTEXT.
+        NormalMethod m = (NormalMethod)cls.findDeclaredMethod(memName, memDescriptor, Context.VM_CONTEXT);
         if (m != null) {
           m.setRuntimeServiceMethod(true);
           return m;
@@ -228,4 +233,17 @@ public class EntrypointHelper {
     throw new Error("Entrypoints.getMethod: can't resolve class=" +
         klass + " method=" + member + " desc=" + descriptor);
   }
+
+  // Octet: Additional methods to support multiple resolved methods for every method reference.
+
+  public static MethodReference getMethodReference(Class<?> klass, String member, String descriptor) {
+    return getMethodReference(TypeReference.findOrCreate(klass), member, descriptor);
+  }
+
+  public static MethodReference getMethodReference(TypeReference typeRef, String member, String descriptor) {
+    Atom memName = Atom.findOrCreateAsciiAtom(member);
+    Atom memDescriptor = Atom.findOrCreateAsciiAtom(descriptor);
+    return MethodReference.findOrCreate(typeRef, memName, memDescriptor);
+  }
+
 }

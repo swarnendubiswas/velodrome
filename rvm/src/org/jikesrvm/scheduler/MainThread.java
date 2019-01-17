@@ -22,11 +22,13 @@ import org.jikesrvm.Callbacks;
 import org.jikesrvm.CommandLineArgs;
 import org.jikesrvm.VM;
 import org.jikesrvm.classloader.Atom;
+import org.jikesrvm.classloader.Context;
 import org.jikesrvm.classloader.RVMClass;
 import org.jikesrvm.classloader.RVMClassLoader;
 import org.jikesrvm.classloader.RVMMethod;
 import org.jikesrvm.classloader.TypeReference;
 import org.jikesrvm.runtime.Reflection;
+import org.jikesrvm.velodrome.Velodrome;
 import org.vmmagic.pragma.Entrypoint;
 
 /**
@@ -178,6 +180,10 @@ public final class MainThread extends Thread {
       VM.sysWrite(cls + " doesn't have a \"public static void main(String[])\" method to execute\n");
       return;
     }
+    
+    // Velodrome: Context: main() method is always supposed to be non-atomic
+    if (VM.VerifyAssertions && Velodrome.isVelodromeEnabled()) { VM._assert(mainMethod.getMemberRef().asMethodReference().isNonAtomic); }
+    if (VM.VerifyAssertions && Velodrome.isVelodromeEnabled()) { VM._assert(mainMethod.getStaticContext() == Context.NONTRANS_CONTEXT); }
 
     if (dbg) VM.sysWrite("[MainThread.run() making arg list... ");
     // create "main" argument list

@@ -13,6 +13,7 @@
 package org.jikesrvm.classloader;
 
 import java.util.StringTokenizer;
+
 import org.jikesrvm.VM;
 import org.jikesrvm.util.ImmutableEntryHashSetRVM;
 import org.vmmagic.pragma.Uninterruptible;
@@ -243,11 +244,12 @@ public abstract class MemberReference {
    * @return the RVMMember this reference resolves to if it is already known
    * or {@code null} if it cannot be resolved without risking class loading.
    */
-  public final RVMMember peekResolvedMember() {
+  // Octet: Static cloning: Support multiple resolved methods for every method reference.
+  public final RVMMember peekResolvedMember(int context) {
     if (isFieldReference()) {
       return this.asFieldReference().peekResolvedField();
     } else {
-      return this.asMethodReference().peekResolvedMethod();
+      return this.asMethodReference().peekResolvedMethod(context);
     }
   }
 
@@ -255,11 +257,12 @@ public abstract class MemberReference {
    * Force resolution and return the resolved member.
    * Will cause classloading if necessary
    */
-  public final RVMMember resolveMember() {
+  // Octet: Static cloning: Support multiple resolved methods for every method reference.
+  public final RVMMember resolveMember(int context) {
     if (isFieldReference()) {
       return this.asFieldReference().resolve();
     } else {
-      return this.asMethodReference().resolve();
+      return this.asMethodReference().resolve(context);
     }
   }
 
@@ -268,7 +271,19 @@ public abstract class MemberReference {
    * referenced from "that" method?
    */
   public final boolean needsDynamicLink(RVMMethod that) {
-    RVMMember resolvedThis = this.peekResolvedMember();
+    // Octet: Static cloning: Support multiple resolved methods for every method reference.
+    // Velodrome: Context: Compute context if call is from library/VM to application
+    int context = that.getStaticContext();
+    if (isMethodReference()) {
+      if (Context.isApplicationPrefix(this.getType()) && !Context.isApplicationPrefix(that.getDeclaringClass().getTypeRef())) {
+        if (this.asMethodReference().isNonAtomic) {
+          context = Context.NONTRANS_CONTEXT;
+        } else {
+          context = Context.TRANS_CONTEXT;  
+        }
+      }
+    }
+    RVMMember resolvedThis = this.peekResolvedMember(context);
 
     if (resolvedThis == null) {
       // can't tell because we haven't resolved the member reference

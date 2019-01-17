@@ -50,16 +50,19 @@ public interface JavaHeaderConstants extends SizeConstants {
   /** Size of GC and miscellaneous headers */
   int OTHER_HEADER_BYTES = GC_HEADER_BYTES + MISC_HEADER_BYTES;
 
+  // Octet: Put MiscHeader *between* JavaHeader and fields? Helps with Octet because then the lowest bit of the MiscHeader word doesn't need to be 0.
+  final boolean miscHeaderAfter = true;
+
   /** Offset of array length from object reference */
   Offset ARRAY_LENGTH_OFFSET = Offset.fromIntSignExtend(-ARRAY_LENGTH_BYTES);
   /** Offset of the first field from object reference */
   Offset FIELD_ZERO_OFFSET = ARRAY_LENGTH_OFFSET;
   /** Offset of the Java header from the object reference */
-  Offset JAVA_HEADER_OFFSET = ARRAY_LENGTH_OFFSET.minus(JAVA_HEADER_BYTES);
+  Offset JAVA_HEADER_OFFSET = ARRAY_LENGTH_OFFSET.minus(JAVA_HEADER_BYTES + (miscHeaderAfter ? MISC_HEADER_BYTES : 0));
   /** Offset of the miscellaneous header from the object reference */
-  Offset MISC_HEADER_OFFSET = JAVA_HEADER_OFFSET.minus(MISC_HEADER_BYTES);
+  Offset MISC_HEADER_OFFSET = (miscHeaderAfter ? ARRAY_LENGTH_OFFSET : JAVA_HEADER_OFFSET).minus(MISC_HEADER_BYTES);
   /** Offset of the garbage collection header from the object reference */
-  Offset GC_HEADER_OFFSET = MISC_HEADER_OFFSET.minus(GC_HEADER_BYTES);
+  Offset GC_HEADER_OFFSET = (miscHeaderAfter ? JAVA_HEADER_OFFSET : MISC_HEADER_OFFSET).minus(GC_HEADER_BYTES);
   /** Offset of first element of an array */
   Offset ARRAY_BASE_OFFSET = Offset.zero();
 

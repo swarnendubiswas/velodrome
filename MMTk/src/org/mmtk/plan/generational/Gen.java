@@ -15,7 +15,6 @@ package org.mmtk.plan.generational;
 import org.mmtk.plan.*;
 import org.mmtk.policy.CopySpace;
 import org.mmtk.policy.Space;
-
 import org.mmtk.utility.deque.*;
 import org.mmtk.utility.heap.Map;
 import org.mmtk.utility.heap.VMRequest;
@@ -23,9 +22,7 @@ import org.mmtk.utility.Log;
 import org.mmtk.utility.options.Options;
 import org.mmtk.utility.sanitychecker.SanityChecker;
 import org.mmtk.utility.statistics.*;
-
 import org.mmtk.vm.VM;
-
 import org.vmmagic.pragma.*;
 import org.vmmagic.unboxed.*;
 
@@ -65,9 +62,18 @@ public abstract class Gen extends StopTheWorld {
   public static final boolean USE_OBJECT_BARRIER_FOR_PUTFIELD = false; // choose between slot and object barriers
   public static final boolean USE_OBJECT_BARRIER = USE_OBJECT_BARRIER_FOR_AASTORE || USE_OBJECT_BARRIER_FOR_PUTFIELD;
 
+  // Octet: Get more virtual memory by decreasing the fixed amount of virtual memory for the nursery
+  // (This may cause problems if GC is deferred a lot.  Note that GC will get triggered by default when the nursery fills to 32 MB.)
   /** Fraction of available virtual memory to give to the nursery (if contiguous) */
-  protected static final float NURSERY_VM_FRACTION = 0.15f;
-
+  //protected static final float NURSERY_VM_FRACTION = 0.15f;
+  private static final int NURSERY_VM_MB = 64;
+  protected static final float NURSERY_VM_FRACTION = Space.getFracForMB(NURSERY_VM_MB);
+  static {
+    if (VM.VERIFY_ASSERTIONS) {
+      VM.assertions._assert(Space.getFracAvailable(NURSERY_VM_FRACTION).toInt() == NURSERY_VM_MB << LOG_BYTES_IN_MBYTE);  
+    }
+  }
+  
   /** Switch between a contiguous and discontiguous nursery (experimental) */
   static final boolean USE_DISCONTIGUOUS_NURSERY = false;
 
@@ -347,7 +353,7 @@ public abstract class Gen extends StopTheWorld {
    * @return {@code true} if the object resides within the nursery
    */
   @Inline
-  static boolean inNursery(ObjectReference obj) {
+  public static boolean inNursery(ObjectReference obj) { // Velodrome: Made the method public
     return inNursery(obj.toAddress());
   }
 

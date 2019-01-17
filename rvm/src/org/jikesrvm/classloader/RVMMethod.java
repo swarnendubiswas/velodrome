@@ -12,26 +12,36 @@
  */
 package org.jikesrvm.classloader;
 
+import static org.jikesrvm.classloader.TypeReference.baseReflectionClass;
+import static org.jikesrvm.ia32.StackframeLayoutConstants.INVISIBLE_METHOD_ID;
+import static org.jikesrvm.ia32.StackframeLayoutConstants.STACKFRAME_SENTINEL_FP;
+
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.lang.annotation.Annotation;
+
 import org.jikesrvm.ArchitectureSpecific.CodeArray;
 import org.jikesrvm.ArchitectureSpecific.LazyCompilationTrampoline;
 import org.jikesrvm.VM;
 import org.jikesrvm.compilers.common.CompiledMethod;
 import org.jikesrvm.compilers.common.CompiledMethods;
+import org.jikesrvm.octet.Octet;
 import org.jikesrvm.runtime.Entrypoints;
+import org.jikesrvm.runtime.Magic;
 import org.jikesrvm.runtime.Reflection;
 import org.jikesrvm.runtime.ReflectionBase;
 import org.jikesrvm.runtime.Statics;
 import org.jikesrvm.util.HashMapRVM;
 import org.jikesrvm.util.ImmutableEntryHashMapRVM;
+import org.jikesrvm.velodrome.Velodrome;
 import org.vmmagic.pragma.Pure;
 import org.vmmagic.pragma.RuntimePure;
 import org.vmmagic.pragma.Uninterruptible;
 import org.vmmagic.pragma.Unpreemptible;
+import org.vmmagic.unboxed.Address;
 import org.vmmagic.unboxed.Offset;
-import static org.jikesrvm.classloader.TypeReference.baseReflectionClass;
+
+// Octet: Static cloning: Modified this class in various places to support multiple resolved methods for every method reference.
 
 /**
  * A method of a java class corresponding to a method_info structure
@@ -39,6 +49,12 @@ import static org.jikesrvm.classloader.TypeReference.baseReflectionClass;
  * {@link #readMethod} method.
  */
 public abstract class RVMMethod extends RVMMember implements BytecodeConstants {
+
+  /** Because of inheritance, a method with just one static context may have multiple resolved methods (one for each context). */
+  private final int resolvedContext;
+
+  /** A method will always have a static context that reflects where it will be called from and what it should call. */
+  private final int staticContext;
 
   /**
    * current compiled method for this method
@@ -87,7 +103,7 @@ public abstract class RVMMethod extends RVMMember implements BytecodeConstants {
    */
   protected RVMMethod(TypeReference declaringClass, MemberReference memRef, short modifiers,
                       TypeReference[] exceptionTypes, Atom signature, RVMAnnotation[] annotations,
-                      RVMAnnotation[][] parameterAnnotations, Object annotationDefault) {
+                      RVMAnnotation[][] parameterAnnotations, Object annotationDefault, int resolvedContext) {
     super(declaringClass, memRef, (short) (modifiers & APPLICABLE_TO_METHODS), signature, annotations);
     if (parameterAnnotations != null) {
       synchronized(RVMMethod.parameterAnnotations) {
@@ -104,6 +120,74 @@ public abstract class RVMMethod extends RVMMember implements BytecodeConstants {
         annotationDefaults.put(this, annotationDefault);
       }
     }
+    this.resolvedContext = resolvedContext;
+    // Velodrome: Context: Initialize static context for application methods 
+    if (Context.isApplicationPrefix(memRef.getType())) {
+      this.staticContext = computeMeetOfResolvedContextAndAtomicitySpec(memRef.asMethodReference(), resolvedContext);
+    } else {
+      this.staticContext = Context.getStaticContext(memRef.asMethodReference(), resolvedContext);
+    }
+  }
+
+  protected RVMMethod(RVMMethod method, int resolvedContext) {
+    super(method);
+    if (method.getParameterAnnotations() != null) {
+      synchronized(RVMMethod.parameterAnnotations) {
+        RVMMethod.parameterAnnotations.put(this, method.getParameterAnnotations());
+      }
+    }
+    if (method.getExceptionTypes() != null) {
+      synchronized(RVMMethod.exceptionTypes) {
+        RVMMethod.exceptionTypes.put(this, method.getExceptionTypes());
+      }
+    }
+    if (method.getAnnotationDefault() != null) {
+      synchronized(annotationDefaults) {
+        annotationDefaults.put(this, method.getAnnotationDefault());
+      }
+    }
+    this.resolvedContext = resolvedContext;
+    // Velodrome: Context: Initialize static context for application methods 
+    if (Context.isApplicationPrefix(memRef.getType())) {
+      this.staticContext = computeMeetOfResolvedContextAndAtomicitySpec(memRef.asMethodReference(), resolvedContext);
+    } else {
+      this.staticContext = Context.getStaticContext(memRef.asMethodReference(), resolvedContext);
+    }
+  }
+  
+  /** Velodrome: Context: Compute static context only for application methods. Logically, the static context of a method 
+   * is the meet of the resolved context and the atomicity specification.
+   * 
+   * Resolved Context     Atomicity spec              Static Context
+   * 
+   *    Trans                 Trans                       Trans
+   *    Trans                 Non-trans                   Trans
+   *    Non-trans             Trans                       Trans (Need to instrument prolog/epilog)
+   *    Non-trans             Non-trans                   Non-trans
+   *    
+   *  */
+  public static int computeMeetOfResolvedContextAndAtomicitySpec(MethodReference methodRef, int resolvedContext) {
+    int meet = Context.NONTRANS_CONTEXT;
+    if (resolvedContext == Context.TRANS_CONTEXT) {
+      meet = Context.TRANS_CONTEXT;
+    } else {
+      if (!methodRef.isNonAtomic) {
+        meet = Context.TRANS_CONTEXT;
+      }
+    }
+    return meet;
+  }
+
+  abstract RVMMethod cloneMethod(int resolvedContext);
+
+  @Uninterruptible
+  public final int getResolvedContext() {
+    return resolvedContext;
+  }
+  
+  @Uninterruptible
+  public final int getStaticContext() {
+    return staticContext;
   }
 
   /**
@@ -142,7 +226,7 @@ public abstract class RVMMethod extends RVMMember implements BytecodeConstants {
    * @param input the DataInputStream to read the method's attributes from
    */
   static RVMMethod readMethod(TypeReference declaringClass, int[] constantPool, MemberReference memRef,
-                              short modifiers, DataInputStream input) throws IOException {
+                              short modifiers, DataInputStream input, int resolvedContext) throws IOException {
     short tmp_localWords = 0;
     short tmp_operandWords = 0;
     byte[] tmp_bytecodes = null;
@@ -237,7 +321,8 @@ public abstract class RVMMethod extends RVMMember implements BytecodeConstants {
                               tmp_signature,
                               annotations,
                               parameterAnnotations,
-                              tmp_annotationDefault);
+                              tmp_annotationDefault,
+                              resolvedContext);
     } else if ((modifiers & ACC_ABSTRACT) != 0) {
       method =
           new AbstractMethod(declaringClass,
@@ -247,8 +332,8 @@ public abstract class RVMMethod extends RVMMember implements BytecodeConstants {
                                 tmp_signature,
                                 annotations,
                                 parameterAnnotations,
-                                tmp_annotationDefault);
-
+                                tmp_annotationDefault,
+                                resolvedContext);
     } else {
       method =
           new NormalMethod(declaringClass,
@@ -265,7 +350,8 @@ public abstract class RVMMethod extends RVMMember implements BytecodeConstants {
                               tmp_signature,
                               annotations,
                               parameterAnnotations,
-                              tmp_annotationDefault);
+                              tmp_annotationDefault,
+                              resolvedContext);
     }
     return method;
   }
@@ -307,7 +393,8 @@ public abstract class RVMMethod extends RVMMember implements BytecodeConstants {
                                null,
                                null,
                                null,
-                               null);
+                               null,
+                               Context.VM_CONTEXT);
   }
 
   /**
@@ -364,7 +451,8 @@ public abstract class RVMMethod extends RVMMember implements BytecodeConstants {
                                null,
                                null,
                                null,
-                               null);
+                               null,
+                               Context.VM_CONTEXT);
   }
 
   /**
@@ -693,9 +781,34 @@ public abstract class RVMMethod extends RVMMember implements BytecodeConstants {
       return currentCompiledMethod.getEntryCodeArray();
     } else if (!VM.writingBootImage || isNative()) {
       if (!isStatic() && !isObjectInitializer() && !isPrivate()) {
+        // Velodrome: Context: Walk the stack to find out which RVMMethod version to use depending on the context
+        int context = getResolvedContext();
+        if (context == Context.VM_CONTEXT && Context.isApplicationPrefix(declaringClass.getTypeRef())) {
+          Address fp = Magic.getFramePointer();
+          fp = Magic.getCallerFramePointer(fp);
+          // Search for the topmost application frame/method
+          while (Magic.getCallerFramePointer(fp).NE(STACKFRAME_SENTINEL_FP)) {
+            int compiledMethodId = Magic.getCompiledMethodID(fp);
+            if (compiledMethodId != INVISIBLE_METHOD_ID) {
+              CompiledMethod compiledMethod = CompiledMethods.getCompiledMethod(compiledMethodId);
+              RVMMethod method = compiledMethod.getMethod();
+              if (!method.isNative() && Octet.shouldInstrumentMethod(method)) {
+                context = method.getStaticContext();
+                break;
+              }
+            }
+            fp = Magic.getCallerFramePointer(fp);
+          }
+        }
+        // Velodrome: Context: Library class (javax.*) can extend application classes (gnu.java.*), example hedc.
+        // See comment in Context for library prefixes.
+        if (Context.isLibraryPrefix(declaringClass.getTypeRef()) && 
+            Context.isApplicationPrefix(declaringClass.getSuperClass().getTypeRef())) {
+          context = Context.TRANS_CONTEXT;
+        }
         // A non-private virtual method.
         if (declaringClass.isJavaLangObjectType() ||
-            declaringClass.getSuperClass().findVirtualMethod(getName(), getDescriptor()) == null) {
+            declaringClass.getSuperClass().findVirtualMethod(getName(), getDescriptor(), /*getResolvedContext()*/ context) == null) {
           // The root method of a virtual method family can use the lazy method invoker directly.
           return Entrypoints.lazyMethodInvokerMethod.getCurrentEntryCodeArray();
         } else {
@@ -918,7 +1031,8 @@ public abstract class RVMMethod extends RVMMember implements BytecodeConstants {
                                null,
                                null,
                                null,
-                               null);
+                               null,
+                               Context.VM_CONTEXT);
   }
 
   /**
@@ -1104,6 +1218,7 @@ public abstract class RVMMethod extends RVMMember implements BytecodeConstants {
                                null,
                                null,
                                null,
-                               null);
+                               null,
+                               Context.VM_CONTEXT);
   }
 }

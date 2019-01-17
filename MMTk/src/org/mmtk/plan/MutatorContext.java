@@ -1113,6 +1113,13 @@ public abstract class MutatorContext implements Constants {
     if (VM.VERIFY_ASSERTIONS) VM.assertions._assert(false);
   }
 
+  /** Octet: support for "pre-barriers" that don't actually perform the write. */
+  public void objectReferencePreWrite(ObjectReference src, Address slot, ObjectReference value, Word metaDataA, Word metaDataB, int mode) {
+    // Either: write barriers are used and this is overridden, or
+    // write barriers are not used and this is never called
+    if (VM.VERIFY_ASSERTIONS) VM.assertions._assert(false);
+  }
+
   /**
    * Read an object reference. Take appropriate read barrier action, and
    * return the value that was read.<p> This is a <b>substituting<b>
@@ -1245,6 +1252,30 @@ public abstract class MutatorContext implements Constants {
     // write barriers are not used and this is a no-op
   }
 
+  // Octet: Support for indicating allocation in uninterruptible code (so GC knows it shouldn't happen immediately).
+  // Octet: TODO: Name these better.
+
+  private int allocatingInUninterruptibleCodeDepth;
+
+  @Inline
+  public final boolean isAllocatingInUninterruptibleCode() {
+    return allocatingInUninterruptibleCodeDepth > 0;
+  }
+  
+  @Inline
+  public final void startAllocatingInUninterruptibleCode() {
+    // This assertion would disallow nesting.  Nesting should be fine, but it could be interesting to know if nesting never happens.
+    //if (VM.VERIFY_ASSERTIONS) { VM.assertions._assert(allocatingInUninterruptibleCodeDepth == 0); }
+    ++allocatingInUninterruptibleCodeDepth;
+  }
+  
+  @Inline
+  public final void stopAllocatingInUninterruptibleCode() {
+    int depth = --allocatingInUninterruptibleCodeDepth;
+    if (VM.VERIFY_ASSERTIONS) { VM.assertions._assert(depth >= 0); }
+    // As of Jikes 3.1.2, we apparently don't need to check explicitly if an asynchronous collection has been triggered.
+  }
+  
   /***********************************************************************
    *
    * Miscellaneous

@@ -18,6 +18,7 @@ import org.jikesrvm.ArchitectureSpecific.CodeArray;
 import org.jikesrvm.SizeConstants;
 import org.jikesrvm.VM;
 import org.jikesrvm.classloader.Atom;
+import org.jikesrvm.classloader.Context;
 import org.jikesrvm.classloader.RVMClass;
 import org.jikesrvm.classloader.RVMMethod;
 import org.jikesrvm.classloader.RVMType;
@@ -91,7 +92,8 @@ public final class SpecializedScanMethod extends SpecializedMethod implements Si
       /* Compile our specialized methods when we are opt compiling */
       RVMClass myClass = specializedScanMethodType.peekType().asClass();
       for(int i=0; i < PATTERNS; i++) {
-        RVMMethod method = myClass.findStaticMethod(templateMethodName(i), specializedMethodDescriptor);
+        // Octet: Static cloning: Support multiple resolve methods for each method reference.
+        RVMMethod method = myClass.findStaticMethod(templateMethodName(i), specializedMethodDescriptor, Context.VM_CONTEXT);
         specializedMethods[i] = compileSpecializedMethod(method, specializedSignature);
       }
     }

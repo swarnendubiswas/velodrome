@@ -15,13 +15,15 @@ package org.mmtk.plan;
 import org.mmtk.policy.Space;
 import org.mmtk.utility.Constants;
 import org.mmtk.utility.Log;
-import org.mmtk.utility.deque.*;
+import org.mmtk.utility.deque.AddressDeque;
+import org.mmtk.utility.deque.ObjectReferenceDeque;
 import org.mmtk.utility.options.Options;
-
 import org.mmtk.vm.VM;
-
-import org.vmmagic.pragma.*;
-import org.vmmagic.unboxed.*;
+import org.vmmagic.pragma.Inline;
+import org.vmmagic.pragma.Uninterruptible;
+import org.vmmagic.unboxed.Address;
+import org.vmmagic.unboxed.ObjectReference;
+import org.vmmagic.unboxed.Offset;
 
 /**
  * This abstract class and its global counterpart implement the core
@@ -43,6 +45,9 @@ public abstract class TraceLocal extends TransitiveClosure implements Constants 
   protected final ObjectReferenceDeque values;
   /** delayed root slots */
   protected final AddressDeque rootLocations;
+  
+  // Velodrome: Per-collector thread queue to store metadata slot addresses
+  public AddressDeque metadataSlots;
 
   /****************************************************************************
    *
@@ -68,6 +73,10 @@ public abstract class TraceLocal extends TransitiveClosure implements Constants 
     super(specializedScan);
     values = new ObjectReferenceDeque("value", trace.valuePool);
     rootLocations = new AddressDeque("roots", trace.rootLocationPool);
+    
+    // Velodrome: Global pool to store metadata slot addresses
+    metadataSlots = new AddressDeque("metadataSlots", trace.metadataSlotsPool);
+    
   }
 
   /****************************************************************************
@@ -200,6 +209,21 @@ public abstract class TraceLocal extends TransitiveClosure implements Constants 
   @Inline
   public final void processNode(ObjectReference object) {
     values.push(object);
+    
+    // Velodrome: The objects have been moved by now if required, and for both nursery and full heap GC, they have not 
+    // yet been scanned. See CopySpace or GenImmixMatureTraceLocal.traceObject(). 
+    // We obviously need to populate the queue for full heap GCs. We need to do so for nursery GCs as well, although we 
+    // are continuing to use generational barriers for stores. Consider the following scenario: the metadata slot and 
+    // the referent could both be in nursery. So the metadata slot is not added to the remset, and the referent gets 
+    // moved to the mature space.
+    
+    if (VM.objectModel.addPerFieldVelodromeMetadata() /*&& !Options.sanityCheck.getValue()*/) { // Ignore sanity checking
+      VM.objectModel.addMetadataSlotsToQueue(object); // Add object to MMTk queue so that metadata references can be traced later
+    }    
+    //VM.objectModel.traceLockMetadata(object); // Velodrome: Add lock metadata slot to weak reference queue
+    // Velodrome: Add object-level reference slots to weak reference queue
+    VM.objectModel.traceObjectLevelMetadata(object);
+    
   }
 
   /**
@@ -208,6 +232,10 @@ public abstract class TraceLocal extends TransitiveClosure implements Constants 
   public final void flush() {
     values.flushLocal();
     rootLocations.flushLocal();
+    
+    // Velodrome: Global pool to store metadata slot addresses
+    metadataSlots.flushLocal();
+    
   }
 
   /**
@@ -463,6 +491,10 @@ public abstract class TraceLocal extends TransitiveClosure implements Constants 
   public void release() {
     values.reset();
     rootLocations.reset();
+    
+    // Velodrome: Per-collector thread queue to store metadata slot addresses
+    metadataSlots.reset();
+    
   }
 
   /**

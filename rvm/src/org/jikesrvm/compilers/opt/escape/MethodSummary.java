@@ -30,6 +30,7 @@ class MethodSummary {
    * Default escape result, that the result escapes but that no parameter is
    * escaping.
    */
+  // Octet: TODO: This seems like the wrong pattern and thus part of the reason escape analysis is broken?
   private static final long RES_ESCAPE = 0x80000000;
 
   /**

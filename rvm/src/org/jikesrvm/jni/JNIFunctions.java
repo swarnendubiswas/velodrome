@@ -20,6 +20,7 @@ import org.jikesrvm.ArchitectureSpecific.JNIHelpers;
 import org.jikesrvm.VM;
 import org.jikesrvm.Properties;
 import org.jikesrvm.SizeConstants;
+import org.jikesrvm.classloader.Context;
 import org.jikesrvm.classloader.RVMArray;
 import org.jikesrvm.classloader.Atom;
 import org.jikesrvm.classloader.RVMClass;
@@ -672,10 +673,11 @@ public class JNIFunctions implements SizeConstants {
 
       // Find the target method
       final RVMMethod meth;
+      // Octet: Static cloning: Support multiple resolved methods for every method reference.
       if (methodString.equals("<init>")) {
-        meth = klass.findInitializerMethod(sigName);
+        meth = klass.findInitializerMethod(sigName, Context.JNI_CONTEXT);
       } else {
-        meth = klass.findVirtualMethod(methodName, sigName);
+        meth = klass.findVirtualMethod(methodName, sigName, Context.JNI_CONTEXT);
       }
 
       if (meth == null) {
@@ -2690,7 +2692,8 @@ public class JNIFunctions implements SizeConstants {
       }
 
       // Find the target method
-      RVMMethod meth = klass.findStaticMethod(methodName, sigName);
+      // Octet: Static cloning: Support multiple resolved methods for every method reference.
+      RVMMethod meth = klass.findStaticMethod(methodName, sigName, Context.JNI_CONTEXT);
       if (meth == null) {
         env.recordException(new NoSuchMethodError());
         return 0;
@@ -5524,7 +5527,8 @@ public class JNIFunctions implements SizeConstants {
         Atom sigName = Atom.findOrCreateAsciiAtom(sigString);
 
         // Find the target method
-        RVMMethod meth = klass.findDeclaredMethod(methodName, sigName);
+        // Octet: Static cloning: Support multiple resolved methods for every method reference.
+        RVMMethod meth = klass.findDeclaredMethod(methodName, sigName, Context.JNI_CONTEXT);
 
         if (meth == null || !meth.isNative()) {
           env.recordException(new NoSuchMethodError(klass + ": " + methodName + " " + sigName));
@@ -5594,6 +5598,7 @@ public class JNIFunctions implements SizeConstants {
 
     try {
       Object obj = env.getJNIRef(objJREF);
+      // Velodrome: Use the instrumented version of lock
       ObjectModel.genericLock(obj);
       return 0;
     } catch (Throwable unexpected) {
@@ -5614,6 +5619,7 @@ public class JNIFunctions implements SizeConstants {
 
     try {
       Object obj = env.getJNIRef(objJREF);
+      // Velodrome: Use the instrumented version of unlock
       ObjectModel.genericUnlock(obj);
       return 0;
     } catch (Throwable unexpected) {
@@ -5700,7 +5706,8 @@ public class JNIFunctions implements SizeConstants {
     if (traceJNI) VM.sysWrite("JNI called: ToReflectedMethod \n");
     RuntimeEntrypoints.checkJNICountDownToGC();
 
-    RVMMethod targetMethod = MemberReference.getMemberRef(methodID).asMethodReference().resolve();
+    // Octet: Static cloning: Support multiple resolved methods for every method reference.
+    RVMMethod targetMethod = MemberReference.getMemberRef(methodID).asMethodReference().resolve(Context.JNI_CONTEXT);
     Object ret;
     if (targetMethod.isObjectInitializer()) {
       ret = java.lang.reflect.JikesRVMSupport.createConstructor(targetMethod);

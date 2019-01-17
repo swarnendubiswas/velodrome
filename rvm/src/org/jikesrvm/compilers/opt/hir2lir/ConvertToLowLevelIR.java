@@ -91,6 +91,7 @@ import static org.jikesrvm.objectmodel.TIBLayoutConstants.TIB_INTERFACE_DISPATCH
 
 import org.jikesrvm.VM;
 import org.jikesrvm.adaptive.AosEntrypoints;
+import org.jikesrvm.classloader.Context;
 import org.jikesrvm.classloader.RVMClass;
 import org.jikesrvm.classloader.RVMField;
 import org.jikesrvm.classloader.InterfaceInvocation;
@@ -780,7 +781,8 @@ public abstract class ConvertToLowLevelIR extends IRTools {
    * @param ir the containing IR
    * @return the last expanded instruction
    */
-  static Instruction callHelper(Instruction v, IR ir) {
+  // Octet: made public so we can call it from OctetInstr
+  public static Instruction callHelper(Instruction v, IR ir) {
     if (!Call.hasMethod(v)) {
       if (VM.VerifyAssertions) VM._assert(Call.getAddress(v) instanceof RegisterOperand);
       return v; // nothing to do....very low level call to address already in the register.
@@ -868,10 +870,16 @@ public abstract class ConvertToLowLevelIR extends IRTools {
     } else {
       if (VM.VerifyAssertions) VM._assert(methOp.isInterface());
       if (VM.VerifyAssertions) VM._assert(!Call.hasAddress(v));
+      // Octet: Static cloning: Modified several locations below to support multiple resolved methods for every method reference.
+      // Velodrome: Context: Interface invocation for non-application methods can only have VM_CONTEXT
+      int context = v.position.method.getStaticContext();
+      if (methOp.hasTarget() && !Context.isApplicationPrefix(methOp.getTarget().getDeclaringClass().getTypeRef())) {
+        context = Context.VM_CONTEXT;
+      }      
       if (VM.BuildForIMTInterfaceInvocation) {
         // SEE ALSO: FinalMIRExpansion (for hidden parameter)
         Operand RHStib = getTIB(v, ir, Call.getParam(v, 0).copy(), Call.getGuard(v).copy());
-        InterfaceMethodSignature sig = InterfaceMethodSignature.findOrCreate(methOp.getMemberRef());
+        InterfaceMethodSignature sig = InterfaceMethodSignature.findOrCreate(methOp.getMemberRef(), context);
         Offset offset = sig.getIMTOffset();
         RegisterOperand address = null;
         RegisterOperand IMT =
@@ -892,7 +900,8 @@ public abstract class ConvertToLowLevelIR extends IRTools {
           itableIndex =
               InterfaceInvocation.getITableIndex(I,
                                                     methOp.getMemberRef().getName(),
-                                                    methOp.getMemberRef().getDescriptor());
+                                                    methOp.getMemberRef().getDescriptor(),
+                                                    context);
         }
         if (itableIndex == -1) {
           // itable index is not known at compile-time.
@@ -901,12 +910,13 @@ public abstract class ConvertToLowLevelIR extends IRTools {
           RegisterOperand realAddrReg = ir.regpool.makeTemp(TypeReference.CodeArray);
           RVMMethod target = Entrypoints.invokeInterfaceMethod;
           Instruction vp =
-              Call.create2(CALL,
+              Call.create3(CALL,
                            realAddrReg,
                            AC(target.getOffset()),
                            MethodOperand.STATIC(target),
                            Call.getParam(v, 0).asRegister().copyU2U(),
-                           IC(methOp.getMemberRef().getId()));
+                           IC(methOp.getMemberRef().getId()),
+                           IC(context));
           vp.position = v.position;
           vp.bcIndex = RUNTIME_SERVICES_BCI;
           v.insertBefore(vp);
@@ -971,7 +981,8 @@ public abstract class ConvertToLowLevelIR extends IRTools {
 
     // Get the offset from the appropriate RVMClassLoader array
     // and check to see if it is valid
-    RegisterOperand offsetTable = getStatic(testBB.lastInstruction(), ir, Entrypoints.memberOffsetsField);
+    // Octet: Static cloning: Support multiple resolved methods for every method reference.
+    RegisterOperand offsetTable = getStatic(testBB.lastInstruction(), ir, Entrypoints.memberOffsetsFields[s.position.method.getStaticContext()]);
     testBB.appendInstruction(Load.create(INT_LOAD,
                                          offset.copyRO(),
                                          offsetTable,

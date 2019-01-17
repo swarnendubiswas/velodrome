@@ -119,4 +119,12 @@ public abstract class Configuration {
    * run Jikes with only one processor.
    */
   public static final boolean AlignmentChecking = @_RVM_WITH_ALIGNMENT_CHECKING_@;
+  
+  // Octet: build-time option: configuration class
+  public static final org.jikesrvm.config.BaseConfig octetConfig = new @_RVM_WITH_CONFIG_CLASS_@();
+  static {
+    if (VM.VerifyAssertions) {
+      System.out.println("config name = @_RVM_WITH_CONFIG_CLASS_@");
+    }
+  }
 }

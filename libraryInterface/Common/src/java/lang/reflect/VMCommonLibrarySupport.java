@@ -227,7 +227,8 @@ final class VMCommonLibrarySupport {
 
     // find the right method to call
     RVMClass C = Magic.getObjectType(receiver).asClass();
-    method = C.findVirtualMethod(method.getName(), method.getDescriptor());
+    // Octet: Static cloning: Support multiple resolved methods for every method reference.
+    method = C.findVirtualMethod(method.getName(), method.getDescriptor(), method.getResolvedContext());
 
     // Invoke method
     try {
